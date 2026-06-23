@@ -510,8 +510,13 @@ function handleModified(orig: OrigUnit, edited: MdUnit, ctx: PatchCtx5): number 
     return patchTextChunk5(block.table, scanTable, orig, edited, ctx, skip)
   }
 
-  if ((block.type === "paragraph" || block.type === "heading") && orig.kind === "text" && edited.kind === "text") {
-    return patchParagraph(block, orig, edited, ctx, skip)
+  if ((block.type === "paragraph" || block.type === "heading") && orig.kind === "text") {
+    if (edited.kind === "text") return patchParagraph(block, orig, edited, ctx, skip)
+    // 문단→표 인플레이스 변환은 HWPX만 지원. HWP5 바이너리는 표 레코드 트리(+DocInfo
+    // borderFill) 삽입이 무손실 게이트와 충돌하므로 미지원 — 대안을 안내하고 skip.
+    if (edited.kind === "gfm-table" || edited.kind === "html-table") {
+      return skip("HWP5(.hwp) 바이너리는 문단→표 인플레이스 변환 미지원 — generate로 새 문서를 만들거나, HWPX(.hwpx)로 저장 후 patch하세요")
+    }
   }
 
   return skip("지원하지 않는 블록 유형 변경")

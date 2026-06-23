@@ -3,7 +3,7 @@
 import { readFileSync, writeFileSync, mkdirSync, statSync } from "fs"
 import { basename, dirname, resolve, extname } from "path"
 import { Command } from "commander"
-import { parse, detectFormat, detectZipFormat, fillFormFields, extractFormFields, blocksToMarkdown, markdownToHwpx, fillHwpx } from "./index.js"
+import { parse, detectFormat, detectZipFormat, fillFormFields, extractFormFields, blocksToMarkdown, markdownToHwpx, fillHwpx, PRESET_ALIAS } from "./index.js"
 import type { ParseOptions } from "./types.js"
 import { VERSION, toArrayBuffer, sanitizeError } from "./utils.js"
 
@@ -332,14 +332,7 @@ program
     }
   })
 
-// 공문서 프리셋 별칭(한글/영문) → 내부 preset 키
-const GONGMUN_PRESET_ALIAS: Record<string, "official" | "report" | "plan" | "notice" | "minutes"> = {
-  official: "official", 기안문: "official", 시행문: "official", 공문: "official", 공문서: "official",
-  report: "report", 보고서: "report",
-  plan: "plan", 계획서: "plan", 계획: "plan",
-  notice: "notice", 통지: "notice", 알림: "notice", 안내: "notice",
-  minutes: "minutes", 회의록: "minutes",
-}
+// 공문서 프리셋 별칭(한글/영문) → 내부 preset 키 — gongmun.ts와 공용(PRESET_ALIAS)
 
 program
   .command("generate <markdown>")
@@ -372,7 +365,7 @@ program
       // 공문서 옵션 구성
       let gongmun: import("./index.js").GongmunOptions | undefined
       if (!opts.plain) {
-        const preset = GONGMUN_PRESET_ALIAS[String(opts.preset).trim()]
+        const preset = PRESET_ALIAS[String(opts.preset).trim()]
         if (!preset) {
           process.stderr.write(`[kordoc] 알 수 없는 프리셋: ${opts.preset} (기안문/보고서/계획서/통지/회의록)\n`)
           process.exit(1)

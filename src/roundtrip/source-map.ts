@@ -477,7 +477,7 @@ function fillRunInsertPos(para: ScanParagraph, xml: string): void {
 }
 
 /** start 위치의 여는 태그에 대응하는 닫는 태그 뒤 위치 (동일 로컬명 중첩 추적) */
-function findElementEnd(xml: string, start: number): number {
+export function findElementEnd(xml: string, start: number): number {
   const open = xml.slice(start).match(/^<([^\s/>!?]+)/)
   if (!open) return -1
   const qname = open[1]

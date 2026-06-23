@@ -310,9 +310,11 @@ export { fillHwpx } from "./form/filler-hwpx.js"
 export type { HwpxFillResult } from "./form/filler-hwpx.js"
 export { markdownToHwpx } from "./hwpx/generator.js"
 export type { HwpxTheme, MarkdownToHwpxOptions } from "./hwpx/generator.js"
+export { normalizeGongmunPreset, PRESET_ALIAS } from "./hwpx/gongmun.js"
 export type {
   GongmunOptions,
   GongmunPreset,
+  GongmunPresetInput,
   GongmunNumbering,
   GongmunFont,
 } from "./hwpx/gongmun.js"

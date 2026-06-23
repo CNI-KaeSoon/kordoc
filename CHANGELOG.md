@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.0] - 2026-06-23
+
+### Added
+
+- **문단 → 표 인플레이스 변환** (`patchHwpx`) — 기존 한글파일(HWPX) 안의 한 문단을
+  편집 마크다운에서 GFM 표(`| … |`)로 바꾸면, 원본 `<hp:p>`를 그 자리에서 표로
+  치환한다. 셀 테두리용 `borderFill`을 `header.xml`에 1회 append(기존 리소스는
+  무손실)하고 표 `instId`는 문서 전역 max+1로 발급해 충돌을 피한다. 나머지 문단·표·
+  서식은 1바이트도 건드리지 않으며, 패치 후 재파싱 무손실 검증을 통과한다.
+  CLI `kordoc patch`·MCP `patch_document`가 자동 상속. (HWP5 바이너리는 표 레코드
+  트리+DocInfo 삽입이 무손실 게이트와 충돌하여 미지원 — 대안 안내 후 graceful skip)
+- **MCP `generate_document` 도구** — 마크다운(표 포함)을 HWPX로 생성. 라이브러리
+  `markdownToHwpx`를 MCP에 노출해, AI 에이전트가 평문을 표로 구조화하거나 parse한
+  내용을 편집해 다시 한글파일로 출력할 수 있다. 공문서 프리셋(`보고서`·`기안문` 등)·
+  글꼴·글자크기 옵션 지원.
+
+### Fixed
+
+- **공문서 모드 한글 프리셋 크래시** — `markdownToHwpx(md, { gongmun: { preset: "보고서" } })`
+  처럼 라이브러리/MCP에서 한글 프리셋명을 직접 넘기면 `PRESET_DEFAULTS[preset]`가
+  `undefined`라 `Cannot read properties of undefined (reading 'bodyPt')`로 터졌다
+  (README 예시가 그대로 크래시). `resolveGongmun`에 `normalizeGongmunPreset`을 추가해
+  한글 별칭→영문 키 정규화 + 미상 시 `official` fallback. CLI의 중복 별칭맵은 공용
+  `PRESET_ALIAS`로 통합.
+
 ## [3.4.1] - 2026-06-22
 
 ### Fixed

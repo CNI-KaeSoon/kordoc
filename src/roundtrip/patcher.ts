@@ -17,15 +17,16 @@ import { blocksToMarkdown } from "../table/builder.js"
 import { normalizedSimilarity } from "../diff/text-diff.js"
 import type { IRBlock, IRTable, PatchOptions, PatchResult, PatchSkip, DiffResult, BlockDiff } from "../types.js"
 import {
-  scanSectionXml, buildParagraphSplices, applySplices, allLinesegRemovalSplices,
+  scanSectionXml, buildParagraphSplices, applySplices, allLinesegRemovalSplices, findElementEnd,
   type SectionScan, type ScanParagraph, type ScanCell, type ScanTable, type SpliceEdit,
 } from "./source-map.js"
 import { patchZipEntries } from "./zip-patch.js"
 import {
-  splitMarkdownUnits, normForMatch, sanitizeText, unescapeGfm, summarize,
+  splitMarkdownUnits, normForMatch, sanitizeText, unescapeGfm, summarize, parseGfmTable,
   type MdUnit,
 } from "./markdown-units.js"
 import { patchGfmTable, patchHtmlTable, patchTextChunkTable } from "./table-patch.js"
+import { collectMaxNumericId, injectCellBorderFill, buildTableParagraphXml } from "./table-insert.js"
 import { resolveSectionEntryNames } from "./hwpx-entries.js"
 
 export type { PatchOptions, PatchResult, PatchSkip } from "../types.js"
@@ -72,6 +73,16 @@ export async function patchHwpx(
     scans.push(scanSectionXml(xml, i))
   }
 
+  // 2b) header.xml 로드 — 문단→표 변환 시 셀 테두리 borderFill 주입 대상
+  //     (header 엔트리를 못 찾으면 tableInsert undefined → 문단→표 변환만 graceful skip)
+  let tableInsert: TableInsertState | undefined
+  const headerEntryName = await resolveHeaderEntryName(zip)
+  if (headerEntryName) {
+    const headerXml = await zip.file(headerEntryName)!.async("text")
+    const maxId = collectMaxNumericId([...scans.map(s => s.xml), headerXml])
+    tableInsert = { headerEntryName, headerXml, headerSplices: [], borderFillId: null, nextId: maxId + 1 }
+  }
+
   // 3) 유닛 구성 + 정렬 (마크다운 도메인 diff)
   const origUnits = buildOrigUnits(origBlocks)
   const editedUnits = splitMarkdownUnits(editedMarkdown)
@@ -90,7 +101,7 @@ export async function patchHwpx(
       const edited = editedUnits[ei]
       if (orig.raw === edited.raw) continue
       applied += handleModifiedUnit(orig, edited, {
-        origBlocks, paraMap, scans, scanTables, obTableOrdinals, sectionSplices, skipped,
+        origBlocks, paraMap, scans, scanTables, obTableOrdinals, sectionSplices, skipped, tableInsert,
       })
     } else if (oi !== null) {
       skipped.push({ reason: "블록 삭제는 미지원 (v1) — 원본 유지", before: summarize(origUnits[oi].raw) })
@@ -110,6 +121,11 @@ export async function patchHwpx(
       sectionSplices[i].push(...allLinesegRemovalSplices(scans[i].xml))
       const newXml = applySplices(scans[i].xml, sectionSplices[i])
       replacements.set(sectionPaths[i], encoder.encode(newXml))
+    }
+    // header.xml 변경 — 문단→표 변환으로 셀 테두리 borderFill이 주입된 경우만
+    if (tableInsert && tableInsert.headerSplices.length > 0) {
+      const newHeader = applySplices(tableInsert.headerXml, tableInsert.headerSplices)
+      replacements.set(tableInsert.headerEntryName, encoder.encode(newHeader))
     }
   } catch (err) {
     return { success: false, applied: 0, skipped, error: `소스맵 splice 실패: ${err instanceof Error ? err.message : String(err)}` }
@@ -356,6 +372,21 @@ export function resolveParagraphMappings(blocks: IRBlock[], scans: SectionScan[]
 
 // ─── 변경 처리 ───────────────────────────────────────
 
+/**
+ * 문단→표 인플레이스 변환 상태 — header.xml에 셀 테두리 borderFill을 1회 주입하고
+ * 표 instId를 문서 전역 유니크하게 발급한다. header 엔트리를 못 찾으면 null
+ * (그 경우 문단→표 변환은 graceful skip).
+ */
+interface TableInsertState {
+  headerEntryName: string
+  headerXml: string
+  headerSplices: SpliceEdit[]
+  /** 첫 표 삽입 시 header에 추가한 셀 테두리 borderFill id (없으면 아직 미주입) */
+  borderFillId: number | null
+  /** 다음 발급할 instId (문서 전역 max+1부터 증가) */
+  nextId: number
+}
+
 interface PatchCtx {
   origBlocks: IRBlock[]
   paraMap: Map<number, ParaMapping>
@@ -364,6 +395,8 @@ interface PatchCtx {
   obTableOrdinals: Map<number, number>
   sectionSplices: SpliceEdit[][]
   skipped: PatchSkip[]
+  /** 문단→표 인플레이스 변환용 (header 엔트리 해석 실패 시 undefined) */
+  tableInsert?: TableInsertState
 }
 
 /** 변경된 유닛 쌍 처리 — 적용 건수 반환 */
@@ -391,11 +424,71 @@ function handleModifiedUnit(orig: OrigUnit, edited: MdUnit, ctx: PatchCtx): numb
     return patchTextChunkTable(block.table, scanTable, orig, edited, ctx, skip)
   }
 
-  if ((block.type === "paragraph" || block.type === "heading") && orig.kind === "text" && edited.kind === "text") {
-    return patchParagraphUnit(block, orig, edited, ctx, skip)
+  if ((block.type === "paragraph" || block.type === "heading") && orig.kind === "text") {
+    if (edited.kind === "text") return patchParagraphUnit(block, orig, edited, ctx, skip)
+    // 문단/헤딩 → 표 인플레이스 변환 (v3.5) — 원본 문단을 그 자리에서 표로 치환
+    if (edited.kind === "gfm-table") return convertParagraphToTable(block, orig, edited, ctx, skip)
+    if (edited.kind === "html-table") return skip("문단→병합표(HTML) 변환은 미지원 — GFM 표(| 헤더 | … |)로 작성하세요")
   }
 
   return skip("지원하지 않는 블록 유형 변경")
+}
+
+// ── 문단 → 표 인플레이스 변환 ──
+
+/** 문단 여는 태그에서 paraPrIDRef 추출 (표를 담는 바깥 문단에 승계) */
+function extractParaPrIdRef(xml: string, start: number): number | null {
+  const gt = xml.indexOf(">", start)
+  if (gt < 0) return null
+  const m = xml.slice(start, gt + 1).match(/paraPrIDRef="(\d+)"/)
+  return m ? parseInt(m[1], 10) : null
+}
+
+/**
+ * 원본 문단(text)을 편집된 GFM 표로 그 자리에서 치환한다.
+ * 문단 <hp:p> 전체 범위를 표 문단 XML로 splice 교체하고, 셀 테두리용 borderFill을
+ * header.xml에 (문서당 1회) 주입한다. 원본의 다른 문단·표·서식은 보존된다.
+ */
+function convertParagraphToTable(
+  block: IRBlock, orig: OrigUnit, edited: MdUnit, ctx: PatchCtx,
+  skip: (reason: string) => number,
+): number {
+  const ti = ctx.tableInsert
+  if (!ti) return skip("문단→표 변환 불가 — header 엔트리(borderFills) 해석 실패")
+
+  const mapping = ctx.paraMap.get(orig.blockIdx)
+  if (!mapping?.para) return skip("문단 소스맵 매핑 실패 (머리말/글상자/캡션 영역) — 표 변환 불가")
+  const para = mapping.para
+  if (para.kind !== "body") return skip("본문 외 영역(표 셀/글상자) 문단의 표 변환은 미지원")
+
+  const scan = ctx.scans[para.sectionIndex]
+  if (!scan) return skip("섹션 매핑 실패")
+  const pEnd = findElementEnd(scan.xml, para.start)
+  if (pEnd < 0) return skip("문단 끝 위치 탐색 실패")
+
+  // 편집 GFM 표 → 행렬
+  const rows = parseGfmTable(edited.lines)
+  if (rows.length === 0 || rows.every(r => r.length === 0)) return skip("표 내용이 비어 있음")
+
+  // 셀 테두리 borderFill 확보 (문서당 1회) — header.xml에 append splice 기록
+  if (ti.borderFillId === null) {
+    const inj = injectCellBorderFill(ti.headerXml, ti.nextId++)
+    if (!inj) return skip("header <hh:borderFills> 구조를 찾을 수 없어 표 테두리 생성 불가")
+    ti.borderFillId = inj.borderFillId
+    ti.headerSplices.push(...inj.headerSplices)
+  }
+
+  const outerParaPrId = extractParaPrIdRef(scan.xml, para.start) ?? 0
+  const tableXml = buildTableParagraphXml(rows, {
+    borderFillId: ti.borderFillId,
+    outerParaPrId,
+    cellParaPrId: 0,
+    cellCharPrId: 0,
+    tableId: ti.nextId++,
+  })
+
+  ctx.sectionSplices[para.sectionIndex].push({ start: para.start, end: pEnd, replacement: tableXml })
+  return 1
 }
 
 // ── 문단 ──
@@ -508,6 +601,27 @@ function unitToBlock(u: MdUnit): IRBlock {
 
 function u8ToArrayBuffer(u8: Uint8Array): ArrayBuffer {
   return u8.buffer.slice(u8.byteOffset, u8.byteOffset + u8.byteLength) as ArrayBuffer
+}
+
+/** header.xml ZIP 엔트리 경로 해석 — 대부분 Contents/header.xml, manifest/스캔 fallback */
+async function resolveHeaderEntryName(zip: JSZip): Promise<string | null> {
+  for (const p of ["Contents/header.xml", "header.xml"]) {
+    if (zip.file(p)) return p
+  }
+  for (const mp of ["Contents/content.hpf", "content.hpf"]) {
+    const f = zip.file(mp)
+    if (!f) continue
+    const xml = await f.async("text")
+    const m = xml.match(/<opf:item\b[^>]*\bid="header"[^>]*\bhref="([^"]+)"/i)
+      || xml.match(/<opf:item\b[^>]*\bhref="([^"]*header[^"]*\.xml)"/i)
+    if (m) {
+      let href = m[1]
+      if (!href.startsWith("/") && !href.startsWith("Contents/")) href = "Contents/" + href
+      if (zip.file(href)) return href
+    }
+  }
+  const found = Object.keys(zip.files).find(n => /header\.xml$/i.test(n))
+  return found ?? null
 }
 
 // 섹션 엔트리 해석은 hwpx-entries.ts로 이동 (session/filler 공용) — re-export로 하위 호환 유지

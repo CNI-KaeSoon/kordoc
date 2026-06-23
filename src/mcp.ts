@@ -6,6 +6,7 @@ import { z } from "zod"
 import { readFileSync, writeFileSync, realpathSync, openSync, readSync, closeSync, statSync, mkdirSync } from "fs"
 import { resolve, isAbsolute, extname, dirname } from "path"
 import { parse, detectFormat, detectZipFormat, blocksToMarkdown, compare, extractFormFields, fillFormFields, markdownToHwpx, fillHwpx, patchHwpx, patchHwp } from "./index.js"
+import type { GongmunOptions } from "./index.js"
 import { VERSION, toArrayBuffer, sanitizeError, KordocError } from "./utils.js"
 import { extractHwp5MetadataOnly } from "./hwp5/parser.js"
 import { extractHwpxMetadataOnly } from "./hwpx/parser.js"
@@ -580,6 +581,47 @@ server.tool(
 
       return {
         content: [{ type: "text", text: lines.join("\n") }],
+      }
+    } catch (err) {
+      return {
+        content: [{ type: "text", text: `오류: ${sanitizeError(err)}` }],
+        isError: true,
+      }
+    }
+  }
+)
+
+// ─── 도구: generate_document ─────────────────────────
+
+server.tool(
+  "generate_document",
+  "마크다운을 HWPX 한글 문서로 생성합니다. GFM 표(| 헤더 | … |)·헤딩·리스트·볼드를 한글 문서 요소로 변환하며, 공문서 프리셋 지정 시 행정 표준 서식(항목부호 8단계·공식 여백·명조 15pt)으로 렌더링합니다. 활용: 평문 문장을 표로 구조화해 새 한글파일로 만들거나, parse_document로 읽은 내용을 편집해 다시 HWPX로 출력. (원본 서식을 보존하며 일부 텍스트/표만 제자리 수정하려면 patch_document 사용)",
+  {
+    markdown: z.string().min(1).describe("HWPX로 변환할 마크다운 전문. 표는 GFM 문법 사용 (예: '| 이름 | 부서 |\\n| --- | --- |\\n| 홍길동 | 기획팀 |')"),
+    output_path: z.string().min(1).describe("출력 HWPX 파일의 절대 경로 (.hwpx 권장)"),
+    preset: z.enum(["기안문", "보고서", "계획서", "통지", "회의록", "official", "report", "plan", "notice", "minutes"]).optional()
+      .describe("공문서 프리셋 — 지정 시 한국 행정 공문서 표준 서식 적용. 미지정 시 범용 마크다운 변환"),
+    font: z.enum(["myeongjo", "gothic"]).optional().describe("본문 글꼴(공문서 모드): myeongjo=함초롬바탕(명조), gothic=맑은 고딕"),
+    body_pt: z.number().int().min(6).max(40).optional().describe("본문 글자 크기(pt, 공문서 모드). 기본 15"),
+  },
+  async ({ markdown, output_path, preset, font, body_pt }) => {
+    try {
+      let gongmun: GongmunOptions | undefined
+      if (preset) {
+        gongmun = { preset }
+        if (font) gongmun.bodyFont = font
+        if (body_pt) gongmun.bodyPt = body_pt
+      }
+      const buf = await markdownToHwpx(markdown, gongmun ? { gongmun } : undefined)
+      const out = resolve(output_path)
+      mkdirSync(dirname(out), { recursive: true })
+      writeFileSync(out, Buffer.from(buf))
+
+      const mode = gongmun ? `공문서:${gongmun.preset}` : "범용"
+      const tableCount = (markdown.match(/^\s*\|.*\|\s*$/gm) || []).length > 0
+        ? `, 표 포함` : ""
+      return {
+        content: [{ type: "text", text: `✓ HWPX 생성 (${mode}${tableCount}) → ${out}\n크기: ${(buf.byteLength / 1024).toFixed(1)}KB` }],
       }
     } catch (err) {
       return {
