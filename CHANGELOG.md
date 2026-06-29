@@ -5,6 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.2] - 2026-06-29
+
+### Improved
+
+- **공문서 보고서 모드(`□ ○ -`) 서식 정밀화** — 정부 보도자료 붙임 등 실제
+  표준 보고서 양식에 맞춰 두 가지 보강(`report` numbering 한정, `standard`
+  `1. 가.` 모드는 영향 없음):
+  - **1단계 `□` 대제목 자동 굵게** — `list_item` 렌더에서 `depth===0`이면
+    `CHAR_BOLD` 적용. 정부 보고서의 □ 대제목 관행.
+  - **`□` 섹션 위 단락 간격** — `GONGMUN_LIST_BASE+0` paraPr에
+    `spaceBefore = bodyHeight × 0.5` 추가로 섹션 구분.
+- 괄호 라벨 굵게(`**(일시)**` → `(일시)`만 bold)는 기존 인라인 span 처리로 이미
+  동작(별도 변경 없음). 한컴 실오픈으로 정답지 양식 일치 확인.
+
 ## [3.5.0] - 2026-06-23
 
 ### Added

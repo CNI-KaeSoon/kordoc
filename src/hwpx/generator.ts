@@ -464,7 +464,9 @@ function buildParaProperties(gongmun: ResolvedGongmun | null): string {
   // 항목 단계별 paraPr (8 ~ 8+7): left/내어쓰기 indent
   for (let d = 0; d < GONGMUN_LIST_LEVELS; d++) {
     const { left, indent } = levelIndent(d, gongmun.bodyHeight, gongmun.numbering)
-    base.push(paraPr(GONGMUN_LIST_BASE + d, { align: "JUSTIFY", lineSpacing: ls, left, indent }))
+    // 보고서(□○-) 1단계 □ 앞에 단락 간격 — 정부 보고서의 섹션 구분 관행
+    const sectionGap = gongmun.numbering === "report" && d === 0 ? Math.round(gongmun.bodyHeight * 0.5) : 0
+    base.push(paraPr(GONGMUN_LIST_BASE + d, { align: "JUSTIFY", lineSpacing: ls, left, indent, spaceBefore: sectionGap }))
   }
   // 가운데정렬 본문 단락(발신명의 등)
   base.push(paraPr(GONGMUN_CENTER, { align: "CENTER", lineSpacing: ls }))
@@ -746,7 +748,9 @@ function blocksToSectionXml(blocks: MdBlock[], theme: ResolvedTheme, gongmun: Re
           const content = block.text || ""
           // 부호 + 1타(공백 1개) + 내용 (부호 없으면 내용만)
           const text = marker ? `${marker} ${content}` : content
-          xml = generateParagraph(text, GONGMUN_LIST_BASE + depth)
+          // 보고서(□○-) 모드의 1단계 □ 대제목은 굵게 — 정부 보고서 관행
+          const listCharPr = gongmun.numbering === "report" && depth === 0 ? CHAR_BOLD : CHAR_NORMAL
+          xml = generateParagraph(text, GONGMUN_LIST_BASE + depth, listCharPr)
           break
         }
         const indent = block.indent || 0
