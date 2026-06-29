@@ -367,6 +367,7 @@ function charPr(
   italic: boolean,
   fontId: number = 0,
   textColor: string = DEFAULT_TEXT_COLOR,
+  ratioPct: number = 100,
 ): string {
   const boldAttr = bold ? ` bold="1"` : ""
   const italicAttr = italic ? ` italic="1"` : ""
@@ -374,9 +375,11 @@ function charPr(
   // macOS 한컴에서 합성 굵기 안 되는 케이스 커버. 코드(fontId=1)는 bold 아닌 경우에만
   // 원본 id 유지 (Consolas/함초롬돋움).
   const effFont = bold ? 2 : fontId
+  // 장평(ratio): 공문서 본문은 95%로 가로 압축 — 한두 글자만 다음 줄로 넘어가는
+  // orphan을 줄여 한 줄에 담는다(실제 공문서 관행). 한글·라틴만, 나머지는 100.
   return `      <hh:charPr id="${id}" height="${height}" textColor="${textColor}" shadeColor="none" useFontSpace="0" useKerning="0" symMark="NONE" borderFillIDRef="0"${boldAttr}${italicAttr}>
         <hh:fontRef hangul="${effFont}" latin="${effFont}" hanja="${effFont}" japanese="${effFont}" other="${effFont}" symbol="${effFont}" user="${effFont}"/>
-        <hh:ratio hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>
+        <hh:ratio hangul="${ratioPct}" latin="${ratioPct}" hanja="${ratioPct}" japanese="100" other="100" symbol="100" user="100"/>
         <hh:spacing hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
         <hh:relSz hangul="100" latin="100" hanja="100" japanese="100" other="100" symbol="100" user="100"/>
         <hh:offset hangul="0" latin="0" hanja="0" japanese="0" other="0" symbol="0" user="0"/>
@@ -385,12 +388,17 @@ function charPr(
 
 // ─── paraPr 생성 헬퍼 ───────────────────────────────
 
-function paraPr(id: number, opts: { align?: string; spaceBefore?: number; spaceAfter?: number; lineSpacing?: number; indent?: number; left?: number } = {}): string {
-  const { align = "JUSTIFY", spaceBefore = 0, spaceAfter = 0, lineSpacing = 160, indent = 0, left = 0 } = opts
-  return `      <hh:paraPr id="${id}" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="1" suppressLineNumbers="0" checked="0" textDir="AUTO">
+function paraPr(id: number, opts: { align?: string; spaceBefore?: number; spaceAfter?: number; lineSpacing?: number; indent?: number; left?: number; keepWord?: boolean } = {}): string {
+  const { align = "JUSTIFY", spaceBefore = 0, spaceAfter = 0, lineSpacing = 160, indent = 0, left = 0, keepWord = false } = opts
+  // keepWord=true면 한글도 어절(단어) 단위로만 줄바꿈 — 단어 중간에서 끊기지 않음.
+  // 단, snapToGrid="1"(글자 격자 강제 정렬)이 켜져 있으면 한컴이 격자에 맞추려고
+  // 어절을 깨버린다. 어절 단위 줄나눔에는 반드시 격자를 꺼야 한다(실제 공문서도 0).
+  const breakNonLatin = keepWord ? "KEEP_WORD" : "BREAK_WORD"
+  const snapGrid = keepWord ? "0" : "1"
+  return `      <hh:paraPr id="${id}" tabPrIDRef="0" condense="0" fontLineHeight="0" snapToGrid="${snapGrid}" suppressLineNumbers="0" checked="0" textDir="AUTO">
         <hh:align horizontal="${align}" vertical="BASELINE"/>
         <hh:heading type="NONE" idRef="0" level="0"/>
-        <hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="BREAK_WORD" widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/>
+        <hh:breakSetting breakLatinWord="KEEP_WORD" breakNonLatinWord="${breakNonLatin}" widowOrphan="0" keepWithNext="0" keepLines="0" pageBreakBefore="0" lineWrap="BREAK"/>
         <hh:autoSpacing eAsianEng="0" eAsianNum="0"/>
         <hh:margin><hc:intent value="${indent}" unit="HWPUNIT"/><hc:left value="${left}" unit="HWPUNIT"/><hc:right value="0" unit="HWPUNIT"/><hc:prev value="${spaceBefore}" unit="HWPUNIT"/><hc:next value="${spaceAfter}" unit="HWPUNIT"/></hh:margin>
         <hh:lineSpacing type="PERCENT" value="${lineSpacing}"/>
@@ -418,11 +426,13 @@ function buildCharProperties(theme: ResolvedTheme, gongmun: ResolvedGongmun | nu
     h3 = body
     h4 = Math.max(body - 100, 1300)
   }
+  // 공문서 본문 장평 95%(orphan 압축). 비공문서·제목은 100 유지.
+  const bodyRatio = gongmun ? 95 : 100
   const rows = [
-    charPr(0, body, false, false, 0, theme.body),
-    charPr(1, body, true, false, 0, theme.body),
-    charPr(2, body, false, true, 0, theme.body),
-    charPr(3, body, true, true, 0, theme.body),
+    charPr(0, body, false, false, 0, theme.body, bodyRatio),
+    charPr(1, body, true, false, 0, theme.body, bodyRatio),
+    charPr(2, body, false, true, 0, theme.body, bodyRatio),
+    charPr(3, body, true, true, 0, theme.body, bodyRatio),
     charPr(4, code, false, false, 1),
     charPr(5, h1, true, false, 1, theme.h1),
     charPr(6, h2, true, false, 1, theme.h2),
@@ -451,25 +461,26 @@ function buildParaProperties(gongmun: ResolvedGongmun | null): string {
   }
   const ls = gongmun.lineSpacing
   const titleAlign = gongmun.centerTitle ? "CENTER" : "LEFT"
+  // 공문서 모드 전 문단 어절 단위 줄바꿈(keepWord) — 한글이 단어 중간에서 끊기지 않음
   const base = [
-    paraPr(0, { lineSpacing: ls }),
-    paraPr(1, { align: titleAlign, spaceBefore: 400, spaceAfter: 400, lineSpacing: ls }),
-    paraPr(2, { align: "LEFT", spaceBefore: 600, spaceAfter: 150, lineSpacing: ls }),
-    paraPr(3, { align: "LEFT", spaceBefore: 400, spaceAfter: 100, lineSpacing: ls }),
-    paraPr(4, { align: "LEFT", spaceBefore: 300, spaceAfter: 100, lineSpacing: ls }),
-    paraPr(5, { align: "LEFT", lineSpacing: 130, indent: 400 }),
-    paraPr(6, { align: "LEFT", lineSpacing: ls, indent: 600 }),
-    paraPr(7, { align: "LEFT", lineSpacing: ls, indent: 600 }),
+    paraPr(0, { lineSpacing: ls, keepWord: true }),
+    paraPr(1, { align: titleAlign, spaceBefore: 400, spaceAfter: 400, lineSpacing: ls, keepWord: true }),
+    paraPr(2, { align: "LEFT", spaceBefore: 600, spaceAfter: 150, lineSpacing: ls, keepWord: true }),
+    paraPr(3, { align: "LEFT", spaceBefore: 400, spaceAfter: 100, lineSpacing: ls, keepWord: true }),
+    paraPr(4, { align: "LEFT", spaceBefore: 300, spaceAfter: 100, lineSpacing: ls, keepWord: true }),
+    paraPr(5, { align: "LEFT", lineSpacing: 130, indent: 400, keepWord: true }),
+    paraPr(6, { align: "LEFT", lineSpacing: ls, indent: 600, keepWord: true }),
+    paraPr(7, { align: "LEFT", lineSpacing: ls, indent: 600, keepWord: true }),
   ]
   // 항목 단계별 paraPr (8 ~ 8+7): left/내어쓰기 indent
   for (let d = 0; d < GONGMUN_LIST_LEVELS; d++) {
     const { left, indent } = levelIndent(d, gongmun.bodyHeight, gongmun.numbering)
     // 보고서(□○-) 1단계 □ 앞에 단락 간격 — 정부 보고서의 섹션 구분 관행
     const sectionGap = gongmun.numbering === "report" && d === 0 ? Math.round(gongmun.bodyHeight * 0.5) : 0
-    base.push(paraPr(GONGMUN_LIST_BASE + d, { align: "JUSTIFY", lineSpacing: ls, left, indent, spaceBefore: sectionGap }))
+    base.push(paraPr(GONGMUN_LIST_BASE + d, { align: "JUSTIFY", lineSpacing: ls, left, indent, spaceBefore: sectionGap, keepWord: true }))
   }
   // 가운데정렬 본문 단락(발신명의 등)
-  base.push(paraPr(GONGMUN_CENTER, { align: "CENTER", lineSpacing: ls }))
+  base.push(paraPr(GONGMUN_CENTER, { align: "CENTER", lineSpacing: ls, keepWord: true }))
   return `<hh:paraProperties itemCnt="${base.length}">\n${base.join("\n")}\n    </hh:paraProperties>`
 }
 
@@ -562,7 +573,7 @@ function generateHeaderXml(theme: ResolvedTheme, gongmun: ResolvedGongmun | null
       <hh:style id="0" type="PARA" name="바탕글" engName="Normal" paraPrIDRef="0" charPrIDRef="0" nextStyleIDRef="0" langIDRef="1042" lockForm="0"/>
     </hh:styles>
   </hh:refList>
-  <hh:compatibleDocument targetProgram="HWP2018"/>
+  <hh:compatibleDocument targetProgram="HWP2018"><hh:layoutCompatibility/></hh:compatibleDocument>
 </hh:head>`
 }
 

@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.5.3] - 2026-06-30
+
+### Improved
+
+- **공문서 모드 한글 줄나눔·자간 정밀화** — 실제 공문서 XML과 동일하게 맞춤:
+  - **어절 단위 줄나눔** — 공문서 paraPr의 `breakNonLatinWord`를 `KEEP_WORD`로,
+    `snapToGrid`를 `0`으로(`keepWord` 옵션 추가). 한글이 단어(어절) 중간에서
+    끊기지 않는다. 격자 정렬(`snapToGrid=1`)이 켜져 있으면 한컴이 어절을 깨므로
+    반드시 함께 꺼야 한다.
+  - **본문 장평 95%** — `charPr`에 `ratioPct` 옵션 추가, 공문서 본문(`charPr` 0~3)
+    한글·라틴 장평을 95%로. 한두 글자만 다음 줄로 넘어가는 orphan을 줄인다.
+  - **레이아웃 호환성** — `<hh:compatibleDocument>`에 `<hh:layoutCompatibility/>`
+    추가(실제 공문서와 동일 구조).
+- 비공문서(일반 md→hwpx) 경로는 기존 baseline 그대로(장평 100·`BREAK_WORD`·
+  `snapToGrid=1`) 유지 — `gongmun`/`keepWord` 가드.
+
+> 참고: `KEEP_WORD`는 표준 OWPML 속성이나 **한컴 macOS 뷰어는 이를 무시**하고
+> 글자 단위로 렌더하는 한계가 있다(한컴 Windows·최신 한글에선 어절 단위로 표시).
+> PDF 출력은 영향 없이 어절 단위로 정상.
+
 ## [3.5.2] - 2026-06-29
 
 ### Improved
