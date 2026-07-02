@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [3.8.2] - 2026-07-03
+
+### Fixed
+
+- **PDF 선 추출 CTM 추적** — 콘텐츠 스트림이 축소/플립 변환을 깔면([0.75,0,0,-0.75,0,H],
+  성과계획서류) 괘선 좌표가 텍스트와 다른 좌표계에 놓여 그리드-텍스트 매핑이 전멸,
+  괘선 표가 선 없는 표 경로로 떨어져 2줄 셀("측정산식/또는 측정방법")이 행으로
+  쪼개지던 버그. 이제 rowspan 병합 셀로 정상 복원. (항등 CTM 문서는 출력 무변화)
+- **pdfjs CID 폰트 자산(cmaps/standard_fonts) 경로 지정** — 미지정이면 CMap 필요
+  폰트의 텍스트가 통째로 소실됐다. 스캔본으로 오판정되던 66페이지 의사록에서
+  임베디드 텍스트층 129KB 전문 추출 복구 (pdftotext도 못 읽는 문서).
+
+### Changed
+
+- **hwpx/generator.ts 1,068줄 → 7모듈 분리 (내부, 공개 API 무변경)** — 생성물
+  ZIP 내부 엔트리 sha256 전/후 동일 검증(`bench/gen-sweep.mjs` 신설).
+- PDF 정확도 벤치: 실코퍼스 42건 coverage 0.99591, 전건 정식 채점(OCR 격리 0).
+
 ## [3.8.1] - 2026-07-03
 
 ### Fixed
