@@ -40,32 +40,50 @@ export function extractLines(
   const verticals: LineSegment[] = []
   let lineWidth = 1
 
+  // CTM 추적 — 경로 좌표는 구성 시점의 CTM 공간에 있다. 콘텐츠 스트림이
+  // 축소/플립 변환을 깔면(성과계획서류: [0.75,0,0,-0.75,0,H]) 선이 텍스트
+  // (getTextContent는 CTM 적용 완료)와 다른 좌표계에 놓여 그리드-텍스트 매핑이
+  // 전멸한다. extractImageRegions와 동일하게 save/restore/transform을 따라간다.
+  let ctm = [1, 0, 0, 1, 0, 0]
+  const ctmStack: number[][] = []
+  const applyCtm = (x: number, y: number): [number, number] =>
+    [ctm[0] * x + ctm[2] * y + ctm[4], ctm[1] * x + ctm[3] * y + ctm[5]]
+  /** CTM 평균 스케일 — lineWidth를 사용자 공간 두께로 환산 */
+  const ctmScale = () =>
+    (Math.hypot(ctm[0], ctm[1]) + Math.hypot(ctm[2], ctm[3])) / 2
+
   let currentPath: Array<{ x1: number; y1: number; x2: number; y2: number }> = []
   let pathStartX = 0, pathStartY = 0
   let curX = 0, curY = 0
 
-  function pushRectangle(
-    path: Array<{ x1: number; y1: number; x2: number; y2: number }>,
-    rx: number, ry: number, rw: number, rh: number,
-  ) {
-    if (Math.abs(rh) < ORIENTATION_TOL * 2) {
-      path.push({ x1: rx, y1: ry + rh / 2, x2: rx + rw, y2: ry + rh / 2 })
-    } else if (Math.abs(rw) < ORIENTATION_TOL * 2) {
-      path.push({ x1: rx + rw / 2, y1: ry, x2: rx + rw / 2, y2: ry + rh })
+  /** 원시 좌표 세그먼트를 CTM 적용해 경로에 추가 */
+  function pushSeg(x1: number, y1: number, x2: number, y2: number) {
+    const [tx1, ty1] = applyCtm(x1, y1)
+    const [tx2, ty2] = applyCtm(x2, y2)
+    currentPath.push({ x1: tx1, y1: ty1, x2: tx2, y2: ty2 })
+  }
+
+  function pushRectangle(rx: number, ry: number, rw: number, rh: number) {
+    // 얇은 사각형(선으로 그린 괘선) 판별은 CTM 적용 후 실제 두께 기준
+    const effH = Math.abs(rh) * Math.hypot(ctm[2], ctm[3])
+    const effW = Math.abs(rw) * Math.hypot(ctm[0], ctm[1])
+    if (effH < ORIENTATION_TOL * 2) {
+      pushSeg(rx, ry + rh / 2, rx + rw, ry + rh / 2)
+    } else if (effW < ORIENTATION_TOL * 2) {
+      pushSeg(rx + rw / 2, ry, rx + rw / 2, ry + rh)
     } else {
-      path.push(
-        { x1: rx, y1: ry, x2: rx + rw, y2: ry },
-        { x1: rx + rw, y1: ry, x2: rx + rw, y2: ry + rh },
-        { x1: rx + rw, y1: ry + rh, x2: rx, y2: ry + rh },
-        { x1: rx, y1: ry + rh, x2: rx, y2: ry },
-      )
+      pushSeg(rx, ry, rx + rw, ry)
+      pushSeg(rx + rw, ry, rx + rw, ry + rh)
+      pushSeg(rx + rw, ry + rh, rx, ry + rh)
+      pushSeg(rx, ry + rh, rx, ry)
     }
   }
 
   function flushPath(isStroke: boolean) {
     if (!isStroke) { currentPath = []; return }
+    const effWidth = lineWidth * ctmScale()
     for (const seg of currentPath) {
-      classifyAndAdd(seg, lineWidth, horizontals, verticals)
+      classifyAndAdd(seg, effWidth, horizontals, verticals)
     }
     currentPath = []
   }
@@ -78,6 +96,27 @@ export function extractLines(
       case OPS.setLineWidth:
         lineWidth = (args as number[])[0] || 1
         break
+
+      case OPS.save:
+        ctmStack.push(ctm.slice())
+        break
+
+      case OPS.restore:
+        ctm = ctmStack.pop() ?? [1, 0, 0, 1, 0, 0]
+        break
+
+      case OPS.transform: {
+        const t = args as number[]
+        ctm = [
+          ctm[0] * t[0] + ctm[2] * t[1],
+          ctm[1] * t[0] + ctm[3] * t[1],
+          ctm[0] * t[2] + ctm[2] * t[3],
+          ctm[1] * t[2] + ctm[3] * t[3],
+          ctm[0] * t[4] + ctm[2] * t[5] + ctm[4],
+          ctm[1] * t[4] + ctm[3] * t[5] + ctm[5],
+        ]
+        break
+      }
 
       case OPS.constructPath: {
         const arg0 = args[0]
@@ -94,15 +133,15 @@ export function extractLines(
               pathStartX = curX; pathStartY = curY
             } else if (subOp === OPS.lineTo) {
               const x2 = coords[ci++], y2 = coords[ci++]
-              currentPath.push({ x1: curX, y1: curY, x2, y2 })
+              pushSeg(curX, curY, x2, y2)
               curX = x2; curY = y2
             } else if (subOp === OPS.rectangle) {
               const rx = coords[ci++], ry = coords[ci++]
               const rw = coords[ci++], rh = coords[ci++]
-              pushRectangle(currentPath, rx, ry, rw, rh)
+              pushRectangle(rx, ry, rw, rh)
             } else if (subOp === OPS.closePath) {
               if (curX !== pathStartX || curY !== pathStartY) {
-                currentPath.push({ x1: curX, y1: curY, x2: pathStartX, y2: pathStartY })
+                pushSeg(curX, curY, pathStartX, pathStartY)
               }
               curX = pathStartX; curY = pathStartY
             } else if (subOp === OPS.curveTo) {
@@ -126,7 +165,7 @@ export function extractLines(
                 pathStartX = curX; pathStartY = curY
               } else if (drawOp === DrawOPS.lineTo) {
                 const x2 = pathData[di++], y2 = pathData[di++]
-                currentPath.push({ x1: curX, y1: curY, x2, y2 })
+                pushSeg(curX, curY, x2, y2)
                 curX = x2; curY = y2
               } else if (drawOp === DrawOPS.curveTo) {
                 di += 6
@@ -134,7 +173,7 @@ export function extractLines(
                 di += 4
               } else if (drawOp === DrawOPS.closePath) {
                 if (curX !== pathStartX || curY !== pathStartY) {
-                  currentPath.push({ x1: curX, y1: curY, x2: pathStartX, y2: pathStartY })
+                  pushSeg(curX, curY, pathStartX, pathStartY)
                 }
                 curX = pathStartX; curY = pathStartY
               } else {

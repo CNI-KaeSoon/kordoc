@@ -171,3 +171,48 @@ describe("normalizeItems 회전 텍스트", () => {
     assert.equal(items[0].fontSize, 10)
   })
 })
+
+// ─── extractLines CTM 추적 (콘텐츠 스트림 변환 하의 괘선 좌표) ─────────
+
+import { extractLines } from "../src/pdf/line-detector.js"
+
+describe("extractLines CTM 추적", () => {
+  // OPS: save=10 restore=11 transform=12 constructPath=91 moveTo=13 lineTo=14 stroke=20
+  it("transform [0.75,0,0,-0.75,0,842] 아래 선이 사용자 공간으로 변환됨", () => {
+    const fnArray = [12, 91, 20]
+    const argsArray: unknown[][] = [
+      [0.75, 0, 0, -0.75, 0, 842],
+      [[13, 14], [100, 100, 500, 100]], // raw (100,100)→(500,100) 수평선
+      [],
+    ]
+    const { horizontals } = extractLines(fnArray, argsArray)
+    assert.equal(horizontals.length, 1)
+    // x: 0.75*100=75 → 0.75*500=375, y: 842-0.75*100=767
+    assert.ok(Math.abs(horizontals[0].y1 - 767) < 0.01, `y=${horizontals[0].y1}`)
+    assert.ok(Math.abs(horizontals[0].x1 - 75) < 0.01 && Math.abs(horizontals[0].x2 - 375) < 0.01)
+  })
+
+  it("save/restore로 CTM 복원 — restore 후 선은 항등 좌표", () => {
+    const fnArray = [10, 12, 11, 91, 20]
+    const argsArray: unknown[][] = [
+      [],
+      [2, 0, 0, 2, 0, 0],
+      [],
+      [[13, 14], [50, 30, 200, 30]],
+      [],
+    ]
+    const { horizontals } = extractLines(fnArray, argsArray)
+    assert.equal(horizontals.length, 1)
+    assert.equal(horizontals[0].y1, 30)
+    assert.equal(horizontals[0].x2, 200)
+  })
+
+  it("항등 CTM에서는 기존과 동일 (무변환)", () => {
+    const fnArray = [91, 20]
+    const argsArray: unknown[][] = [[[13, 14], [10, 20, 400, 20]], []]
+    const { horizontals } = extractLines(fnArray, argsArray)
+    assert.equal(horizontals.length, 1)
+    assert.equal(horizontals[0].x1, 10)
+    assert.equal(horizontals[0].y1, 20)
+  })
+})
