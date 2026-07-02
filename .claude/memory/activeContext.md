@@ -1,100 +1,45 @@
 # Active Context — kordoc 본체
 
-**마지막 업데이트**: 2026-06-12 (Phase A 릴리스 + **Phase B 구현 완료** — 집 PC 인계)
-**상태**: kordoc v3.1.0 = PR #34 머지 + 태그 푸시 + 테스트 500/500. **npm publish만 보류 — npm 토큰 만료(E401), `npm login` 후 `npm publish` 필요.** Phase B는 kordoc-ai PR #1(feat/fill-wizard-phase-b, 머지 대기)에 구현 완료.
+**마지막 업데이트**: 2026-07-02 (v3.6.0 프로덕션 리뷰 — 커밋 완료)
+**상태**: v3.6.0 = main `50bf9bf` 커밋됨(푸시 안 함), 테스트 577/577. **npm publish 미실행**(registry는 아직 3.0.1).
+**다음 세션**: `.claude/plans/next-session-gaps.md` 프롬프트로 잔여 갭(P1 표 구조 변경부터) 착수 — 렌더 하네스는 `.claude/plans/render-rhwp.mjs`
 
-## 🏠 집 PC 인계 체크리스트 (2026-06-12)
-1. **npm publish** (kordoc, v3.1.0) — `npm login` 후 실행. registry엔 아직 3.0.1
-2. kordoc-ai PR #1 리뷰/머지 — 머지 전 `pnpm tauri:dev`로 FillWizard 실행: 웹뷰 WASM 초기화 확인(실패 시에도 사이드카 render_preview 폴백 동작), 실양식 드롭→채움→저장→한/글 육안 검증
-3. 실양식 3종 목표 중 로컬 2종만 확보(서면자문/수당여비, edu-facility-ai/docs/원본자료) — 3종째 필요. 260202 다운로드의 "붙임2 개인정보..." hwpx는 위장 확장자(파싱 불가)
-4. 다음 개발 = **Phase C 클릭-편집**: capability 잠금 시각화, 미리보기 인라인 편집, undo/redo, 30초 자동저장 (플랜: `.claude/plans/kordoc-studio-plan.md` — **gitignore라 이 PC 로컬 전용**, 없으면 studio 메모리/PR 본문 참조)
-5. 함정 메모: pnpm 전역 minimum-release-age(7일) → 신규 패키지는 프로젝트 .npmrc 예외 필요. kordoc-ai concat.test.ts 실패 1건은 기존 픽스처 부재(무관). bench는 코퍼스 보유 환경에서만
+## v3.6.0 이번 세션 요약 (2026-07-02)
 
-## Phase B 완료 요약 (2026-06-12, kordoc-ai 레포)
-- 사이드카 RPC 4종: form_schema/form_fill/patch_blocks(HEAVY) + render_preview(HEAVY 제외) — Rust 화이트리스트 동기화
-- @rhwp/core@0.7.15 듀얼 임베드: 프론트 Vite asset(wasm 5.5MB, CSP `wasm-unsafe-eval` 추가) + 사이드카 Node WASM(esbuild external + dist/node_modules 복사, 번들 stdin RPC 실검증)
-- FillWizard: 좌 자동 폼(타입 위젯/필수/빈칸 배지) + 우 rhwp SVG 미리보기, 필드 포커스↔SVG 하이라이트 + 역방향 점프(svg-annotate), 출처 배지(명부 xlsx → "← 명부.xlsx B2" / 직접 입력 / 양식 기존 값), dry_run 미리보기 반영, 재파싱 검증 배지
-- 실양식 E2E 2종 통과 (서면자문=인라인형, 수당여비=표형). 3종 목표였으나 로컬에 실양식 2개뿐 — 3종째 + 한/글 육안 검증은 사용자 확인 필요
-- pnpm 전역 minimum-release-age(7일) → 프로젝트 .npmrc에 @rhwp/core 예외
-- **코어 버그픽스(v3.1.0 포함)**: 인라인 다중 라벨("성명: 작성일자:") — scanInlineSegments 신설, 인식 오페어링 + 채우기 시 다음 라벨 소실 수정, 문단당 1매칭 제한 해제
+### 신규 핵심: 텍스트 메트릭 엔진 (src/hwpx/text-metrics.ts)
+- 함초롬바탕 정품 TTF advance 전수 추출: 한글 11,172자 균일 970/1000em, 숫자 550, 온점·괄호 320, **Bold=Regular 폭 동일**
+- 줄바꿈 시뮬레이션: keep(어절)/charAll(글자) + 금칙(시작=직전 1글자 동반 밀어내기, 끝=여는괄호 내리기)
+- **오라클 검증**: bench/verify-linebreak.mjs — 실제 결재문서 linesegarray 대조, 고정폭 버킷 98%(56/57)
+- 확정 규칙: 공백 0.5em 고정(useFontSpace=0), 장평·자간 공백에도 적용, 자간=폭×(1+sp/100)
+- ⚠️ 전자결재 변환기·macOS한컴·rhwp는 KEEP_WORD 무시하고 글자단위 조판 (Windows 한컴만 어절)
 
----
+### 수정 (프로덕션 버그)
+1. **fillHwpx/HwpxSession linesegarray 미제거** → 한컴 변조경고/줄배치 틀어짐. patcher처럼 수정 섹션 lineseg 전부 제거
+2. **생성 표 테두리 안 보임** — borderFill id 0-시작이 원인. **1-based 규약**(1=무테두리, 2=SOLID) + centerLine="NONE"(enum). 실전 파일에 id=0 없음
+3. markerWidth 실측화 (괄호 0.45→0.32em 등) — 내어쓰기 정렬 오차 제거
 
-## KorDoc Studio Phase A 완료 (2026-06-12, 미커밋)
+### 신규 기능
+- **autoFit(문단별 자동 장평)**: orphan 문단만 95→90 축소, 변형 charPr(id 11+) 발급. GongmunOptions.autoFit
+- **HTML 표(colspan/rowspan/중첩) → HWPX 생성**: generateHtmlTableXml — parse↔generate 표 라운드트립 완성
+- **다중값 채우기**: values에 string[] — 반복 라벨 순서 소진 + 명부형 표 행별 채움 (ValueCursor, match.ts)
 
-### 프로젝트 컨텍스트
-- **KorDoc Studio (Suite Phase 3R)**: 양식 자동 채우기 + rhwp 미리보기/편집 작업대. 전체 플랜 `.claude/plans/kordoc-studio-plan.md`
-- rhwp 스파이크 검증 완료 (d:\AI_Project\kordoc-studio-spike): @rhwp/core@0.7.15 렌더 OK, exportHwpx 내용 100% 보존(바이트 비보존 → 듀얼 저장 경로)
-- 실양식 테스트 파일: `D:/AI_Project/edu-facility-ai/docs/원본자료/4. 서면자문 의견서(양식).hwpx`
+### 도구/인프라
+- bench/collect-opengov.mjs 사이트 개편 대응 재작성 (title-down에서 파일명, 제목 필터 인자)
+- bench/corpus/review/ 실문서 45건 (gitignore) — e2e DIRS에 "review" 추가로 실파일 스윕 활성화
+- 검증 하네스(로컬 스크래치): @rhwp/core 렌더 → Chrome headless SVG→PNG로 육안 확인 가능
 
-### ✅ 완료된 작업 (브랜치 feat/editor-api-v3.1)
-| 작업 | 파일 | 상태 |
-|------|------|------|
-| HwpxSession (open/capability/patchBlocks/sourceRef) + patchHwpxBlocks | `src/roundtrip/session.ts` (신규) | ✅ |
-| buildRangeSplices(t-도메인)/paraTText/paraTextPureT + 스캐너 additive(excludedParagraphs/orphanTables/inTextbox) | `src/roundtrip/source-map.ts` | ✅ |
-| 섹션 엔트리 해석 공용화 | `src/roundtrip/hwpx-entries.ts` (신규) | ✅ |
-| fillHwpx splice 전환 (바이트 보존 + v3.0 패리티) | `src/form/filler-hwpx.ts` (전면 재작성) | ✅ |
-| extractFormSchema/inferFieldType (타입 7종+required/empty) | `src/form/recognize.ts` | ✅ |
-| PatchResult.changes 필드 신설 (verification과 의미 분리) | `src/types.ts` | ✅ |
-| CJS import.meta 버그 수정 | `tsup.config.ts` (shims:true) | ✅ |
-| 신규 테스트 33개 (동등성 CI 게이트 포함) | `tests/{session-api,form-schema,filler-splice}.test.ts` | ✅ |
+### 남은 백로그 (이번 리뷰에서 확인된 갭 — 미착수)
+- 표 구조 변경(행/열 추가·삭제, 병합 변경) 전 경로 미지원 — 최상위 갭
+- HWP5: 중첩표 셀 수정·빈 셀 채우기·빈 문단 삽입·문단→표 미지원 (HWPX만 지원)
+- IR filler: 병합 라벨셀 값 유실(silent), 중첩표 라벨 미재귀 — hwpx-preserve 경로와 불일치
+- 라벨 인식: 숫자 낀 라벨(연번1 등)·9자↑ 한글·콜론 없는 영문 미인식
+- 셀 줄 병합 시 applied+skip 이중 보고 (silent 손실 가능)
+- buildTableWithCellMeta 재부착 실패 시 중첩표 blocks 유실 (hwpx/parser.ts:864)
+- 수식+병합/중첩 → GFM 강등으로 구조 소실 (builder.ts:430)
+- HWP5 patchHwp 전용 테스트 부재
+- 리스트 사이 표가 끼면 공문서 번호 run이 끊겨 재시작 (마크다운 표현 한계)
 
-### 적대적 리뷰 (26 에이전트, 22건 확정 → 근본원인 14개 전부 수정)
-major 수정: 전각공백 silent drop(동등성 위반), 머리말 영역 채우기 회귀, 탭 문단 재작성 오염, 글상자 라벨 오염, 셀 이미지 토큰 리터럴 기록, 빈 문자열 비우기 핸들 소실, verification 의미 충돌. minor: 재진입 직렬화, ArrayBuffer 뷰 복사, dedup 슬롯, matchedLabels 회수, amount 오탐 등.
-
-### 📋 다음 할 일
-- [x] 커밋 + PR + v3.1.0 릴리스 (CHANGELOG v3.0.1 보강 포함)
-- [x] Phase B (W3-4): kordoc-ai @rhwp/core 임베드 + FillWizard + RPC 4종 + 출처 배지
-- [ ] bench 게이트 회귀 확인 — 코퍼스 로컬 미존재로 미실행 (CI/코퍼스 보유 환경에서 `node bench/score.mjs`)
-- [ ] Phase B 잔여: 실양식 3종째 + 한/글 육안 검증 (사용자), tauri:dev 웹뷰에서 WASM 초기화 실확인
-- [ ] Phase C (클릭-편집): capability 잠금 시각화, 인라인 편집, undo/redo
-- [ ] MCP에 fill_form/form_schema 도구 노출 (Phase D 계획이나 반나절 작업)
-
-### 의도된 제약 (재론 금지)
-- 빈 문자열 블록 비우기 = skip (블록 핸들 소실 + patchHwpx 비대칭 방지)
-- 전략 0 인셀 패턴은 문단 단위 매칭 (문단 경계 걸친 패턴 미지원 — v3.0과 의도적 차이, 파일 헤더 문서화)
-- session의 changes vs patchHwpx의 verification — 의미 다름, 혼용 금지
-
----
-
-## v3.0.0 완료 상태 (2026-06-11)
-
-### 최종 수치 (검증: npm run build && npm test && node bench/score.mjs — 전체 PASS ✅)
-- HWPX recallMicro **0.999978** / recallDoc 미달 0 / 표 exact **100%**(1,421표·중첩 343) / phantom 0.000057
-- PDF coverage **0.99164** / HWP5쌍 유사도 **0.9994** (policy.mjs 정식 게이트 승격)
-- 테스트 **458/458** / 라운드트립 풀스윕: 무변경=바이트동일 전수, 문단수정 128건 무손상(깨끗한 적용 108, 나머지 정직한 skip)
-- 베이스라인 박제: bench/out/score-baseline-v3.0.0.json
-
-### 이번 세션 작업 (커밋 1f3ef33에 포함)
-1. **Wave 3 라운드트립 완성**: tests/roundtrip-e2e.test.ts(실파일 9케이스) + tests/roundtrip-guards.test.ts 신규
-2. **적대적 리뷰 31-에이전트 워크플로 → 확정 26건 전부 수정** (critical 4: 각주 body 오분류/대형문서 시프트 오적용/리터럴 </td> 셀 경계/Buffer view 오염): src/roundtrip/* 전반 + src/hwpx/parser.ts(lineBreak→\n) + src/table/builder.ts(라벨 행 소실)
-3. **신규 코퍼스 120건**: bench/corpus/seoul2(60, 정보소통광장 11p~)/seoul-old(60, rangeDate=custom 2014-2016). 수집기 파라미터화
-4. **채점기 함정 3종 수정**(bench/): 링크 정규식 스킴 한정, 마스킹-only 유닛 모수 제외, 짧은유닛 구간-우선 탐색(개선 3/악화 0) + .hwpx 확장자 OLE2 매직 라우팅
-5. **릴리스 준비 완료**: package.json 3.0.0 / CHANGELOG 3.0.0 항목 / README v3.0.0 섹션+patchHwpx API / baseline 박제
-
-### 다음 작업
-- 남은 백로그: PDF ODL Phase 3 잔여(ClusterTable 완전판/TOC), HWP3 표 복원, 옛한글 PUA 5,659항, 라운드트립 Tier2(HWP5), MCP patchHwpx 도구 노출(킬러 데모), korea-kr2 빈 디렉토리 정리됨
-- 함정 동일: 균등배분 1자 기준 불가침 / PDF 98.5% 합격선 / stale dist / score-baseline-*.json 덮어쓰기 금지
-
----
-
-## 핵심 파일 (신규/대수정)
-| 파일 | 역할 |
-|------|------|
-| bench/score.mjs + ref/ + lib/ | 정확도 채점기 (게이트: policy.mjs) |
-| bench/collect-{korea-kr,opengov}.mjs | 코퍼스 수집기 |
-| src/shared/pua.ts | 한컴 PUA→유니코드 (rhwp 검증 테이블) |
-| src/hwp5/{numbering,images}.ts | 글머리 카운터 / BinData 이미지 |
-| src/roundtrip/*.ts | 라운드트립 patchHwpx (v3.0 완성 — 5파일 + e2e/가드 테스트) |
-| .claude/plans/v3.0.0-master-plan.md | 마스터플랜 + 진단 전문 위치 |
-| .claude/plans/next-session-prompt.md | **다음 세션 프롬프트 (인계 문서)** |
-
-## 주의 (lessons 추가분)
-- 균등배분 1자 기준 불가침 / 휴리스틱 변경 시 코퍼스 정량 전후 비교 필수
-- PDF 첨자(①·*) 별도 행 분리 → 표 오탐 전력 (mergeOverlappingRows 회귀 주의)
-- 채점기 stale dist 함정: src 수정 후 빌드 없이 score.mjs 돌리면 구버전 채점
-- bench/out/score-baseline-v2.9.1.json 덮어쓰기 금지
-
-## 이전 컨텍스트 (참조용 유지)
-- v2.7.0 XLS+Print (Phase 1, 커밋 f41da76) → v2.9.1까지 릴리스됨
-- PDF ODL 업그레이드 Phase 1+2는 v2.x에서 완료, Phase 3는 v3.0 백로그로 승계
+### 함정 메모
+- verify-linebreak 오라클: textpos가 텍스트 길이 초과하는 파일 있음(원본 hwp 컨트롤 좌표 승계) — coordShift로 제외
+- 굴림체=고정폭 1.0em 확정 (970 아님). 한컴돋움은 비례폭이라 HCR 근사 부정확
+- dist 스테일 함정 여전 — src 수정 후 npm run build 필수
