@@ -1,7 +1,7 @@
 # Active Context — kordoc 본체
 
 **마지막 업데이트**: 2026-07-03 (PDF coverage 게이트 PASS + line-detector·hwpx/parser 분리 — 계획 ①② 전부 완료)
-**상태**: 테스트 625/625. score 전 게이트 PASS. origin/main 동기화 예정 커밋 4개
+**상태**: 테스트 625/625. score 전 게이트 PASS. **v3.8.1 npm 게시 + GitHub Release + origin/main 동기화 완료** (registry 3.8.1 확인)
 
 ## 이번 세션 완료 (2026-07-03)
 
