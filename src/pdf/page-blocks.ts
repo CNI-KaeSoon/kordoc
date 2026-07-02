@@ -9,7 +9,7 @@
 import type { IRBlock, IRTable, BoundingBox } from "../types.js"
 import { safeMin, safeMax } from "../utils.js"
 import { extractLines, preprocessLines, filterPageBorderLines, buildTableGrids, extractCells, mapTextToCells, cellTextToString, normalizeUndersegmentedTable, type TextItem, type TableGrid, type LineSegment } from "./line-detector.js"
-import { detectClusterTables, type ClusterItem } from "./cluster-detector.js"
+import { detectClusterTables, findTwoColumnProseCutX, type ClusterItem } from "./cluster-detector.js"
 import { type NormItem, collapseEvenSpacing, computeBBox, dominantStyle, groupByY, mergeSuperscriptLines, mergeLineSimple } from "./text-line.js"
 import { xyCutOrder } from "./xy-cut.js"
 import { detectColumns, extractWithColumns } from "./columns.js"
@@ -47,7 +47,7 @@ export function extractPageBlocksWithLines(
   }
 
   // Fallback: 기존 휴리스틱 (선이 없는 PDF)
-  return extractPageBlocksFallback(items, pageNum)
+  return extractPageBlocksFallback(items, pageNum, true)
 }
 
 // ─── 취소선 감지 (ODL StrikethroughProcessor 포팅) ─────
@@ -383,9 +383,65 @@ function mergeAdjacentTableBlocks(blocks: IRBlock[]): IRBlock[] {
 }
 
 /**
- * 기존 휴리스틱 기반 페이지 블록 추출 (선이 없는 PDF 대비 fallback).
+ * 2단 조판 본문을 읽기 순서 그룹으로 분리 — 전폭 줄(제목·목차)의 y를 경계로
+ * 세로 밴드를 나누고, 각 밴드에서 좌단 전체 → 우단 전체 순으로 배열한다.
  */
-export function extractPageBlocksFallback(items: NormItem[], pageNum: number): IRBlock[] {
+function splitTwoColumnProse(items: NormItem[], cutX: number): NormItem[][] {
+  const left: NormItem[] = []
+  const right: NormItem[] = []
+  const cross: NormItem[] = []
+  for (const i of items) {
+    if (i.x + i.w <= cutX) left.push(i)
+    else if (i.x >= cutX) right.push(i)
+    else cross.push(i)
+  }
+  if (cross.length === 0) {
+    return [left, right].filter(g => g.length > 0)
+  }
+
+  // 전폭 아이템을 y 근접(3pt)으로 경계 줄 묶음 (y 내림차순 = 위→아래)
+  cross.sort((a, b) => b.y - a.y)
+  const crossLines: NormItem[][] = []
+  for (const c of cross) {
+    const last = crossLines[crossLines.length - 1]
+    if (last && Math.abs(last[0].y - c.y) <= 3) last.push(c)
+    else crossLines.push([c])
+  }
+  // 경계 줄과 같은 y의 좌/우 아이템은 그 경계 줄에 편입 (목차 줄의 나란한 조각)
+  const bandItem = (arr: NormItem[]) => arr.filter(i => {
+    for (const cl of crossLines) {
+      if (Math.abs(cl[0].y - i.y) <= 3) { cl.push(i); return false }
+    }
+    return true
+  })
+  const leftRest = bandItem(left)
+  const rightRest = bandItem(right)
+
+  // 밴드 k = 경계줄 k-1 아래 ~ 경계줄 k 위 (PDF y는 위가 큼)
+  const boundYs = crossLines.map(cl => cl[0].y)
+  const bandOf = (y: number) => {
+    let k = 0
+    while (k < boundYs.length && y < boundYs[k]) k++
+    return k
+  }
+  const groups: NormItem[][] = []
+  for (let k = 0; k <= crossLines.length; k++) {
+    const L = leftRest.filter(i => bandOf(i.y) === k)
+    const R = rightRest.filter(i => bandOf(i.y) === k)
+    if (L.length > 0) groups.push(L)
+    if (R.length > 0) groups.push(R)
+    if (k < crossLines.length) groups.push(crossLines[k])
+  }
+  return groups
+}
+
+/**
+ * 기존 휴리스틱 기반 페이지 블록 추출 (선이 없는 PDF 대비 fallback).
+ *
+ * fullPage: 페이지 전체 아이템으로 호출됐을 때만 true — 2단 조판 본문 감지는
+ * 전체 지면 기준 신호라, XY-Cut 그룹(부분 집합) 재호출에서는 오발화하므로 끈다.
+ */
+export function extractPageBlocksFallback(items: NormItem[], pageNum: number, fullPage = false): IRBlock[] {
   if (items.length === 0) return []
 
   const blocks: IRBlock[] = []
@@ -428,20 +484,27 @@ export function extractPageBlocksFallback(items: NormItem[], pageNum: number): I
     })
   } else {
     // 2단계: 레거시 컬럼 감지 (3+ 열)
+    // 2단 조판 본문(속기록류)은 들여쓰기 x-피크가 3+ 열로 오인돼 페이지 전체가
+    // 행 인터리브 탭 텍스트로 뭉개진다 → 단 분리 경로에 위임
+    const proseCutX = fullPage ? findTwoColumnProseCutX(items) : null
     const allYLines = mergeSuperscriptLines(groupByY(items))
-    const columns = detectColumns(allYLines)
+    const columns = proseCutX !== null ? null : detectColumns(allYLines)
 
     if (columns && columns.length >= 3) {
       const tableText = extractWithColumns(allYLines, columns)
       const bbox = computeBBox(items, pageNum)
       blocks.push({ type: "paragraph", text: tableText, pageNumber: pageNum, bbox, style: dominantStyle(items) })
     } else {
-      // 3단계: XY-Cut으로 읽기 순서 결정
+      // 3단계: XY-Cut으로 읽기 순서 결정.
+      // 2단 조판 본문은 전폭 제목/목차 줄이 X 프로젝션을 막아 XY-Cut이 단을 못
+      // 가르는 경우가 있어(속기록 1면) 검출된 컷으로 직접 분리한다.
       const allY = items.map(i => i.y)
       const pageHeight = safeMax(allY) - safeMin(allY)
       const gapThreshold = Math.max(15, pageHeight * 0.03)
 
-      const orderedGroups = xyCutOrder(items, gapThreshold)
+      const orderedGroups = proseCutX !== null
+        ? splitTwoColumnProse(items, proseCutX)
+        : xyCutOrder(items, gapThreshold)
 
       for (const group of orderedGroups) {
         if (group.length === 0) continue

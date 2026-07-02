@@ -127,7 +127,139 @@ export function detectClusterTables(items: ClusterItem[], pageNum: number): Clus
     }
   }
 
-  return results
+  // 4. 2단 조판 본문 오인 강등 — 걸러진 아이템은 usedItems에서 빠져
+  //    XY-Cut(단 분리) 경로로 흘러가 올바른 읽기 순서로 복원된다.
+  return results.filter(r => !isTwoColumnProse(r))
+}
+
+// ─── 2단 조판 본문 판별 ─────────────────────────────────
+
+/**
+ * 감지된 "표"가 실은 2단 조판 본문(국회 속기록·고전 관보류)인지 판별.
+ *
+ * 2단 본문에서는 문단 끝의 짧은 줄 쌍("한 것이올시다." | "다.")이 헤더 조건을
+ * 우연히 만족해 페이지 본문 전체가 2열 표로 흡수된다. 진짜 표와 가르는 신호:
+ * 양쪽 "열" 모두 긴 문장 조각(라벨 열 부재) + 숫자 희박 + 마커 희박 +
+ * 좌우 단 폭 대칭 + 각 단의 오른쪽 끝이 justify로 정렬.
+ * (코퍼스 42건 전수 시뮬레이션에서 속기록 4페이지만 발화, 오발화 0 검증)
+ */
+function isTwoColumnProse(r: ClusterTableResult): boolean {
+  const t = r.table
+  if (t.rows < 8) return false
+
+  // 실질 열: 채움률 30%+ 인 열이 정확히 2개 (유령 열은 무시)
+  const dense: number[] = []
+  for (let c = 0; c < t.cols; c++) {
+    const filled = t.cells.filter(row => row[c]?.text.trim()).length
+    if (filled / t.rows >= 0.3) dense.push(c)
+  }
+  if (dense.length !== 2) return false
+
+  // 두 실질 열 모두 평균 셀 길이가 길어야 함 (진짜 표엔 짧은 라벨/숫자 열 존재)
+  for (const c of dense) {
+    const lens = t.cells.map(row => row[c]?.text.replace(/\s+/g, "").length ?? 0).filter(n => n > 0)
+    const avg = lens.reduce((s, v) => s + v, 0) / (lens.length || 1)
+    if (avg < 12) return false
+  }
+
+  return findTwoColumnProseCutX([...r.usedItems]) !== null
+}
+
+/**
+ * 아이템 집합이 좌우 2단 조판 본문인지 — 줄-투표로 중앙 빈 띠를 찾고
+ * 양쪽이 모두 prose(긴 줄 + 숫자·마커 희박 + justify 정렬 + 폭 대칭)인지 검사.
+ * 2단 본문이면 단 사이 컷 x좌표를, 아니면 null을 반환.
+ * page-blocks에서 레거시 컬럼 감지 가드 + 강제 단 분리에 쓰인다.
+ */
+export function findTwoColumnProseCutX(items: ClusterItem[]): number | null {
+  const lines = groupByBaseline(items)
+  if (lines.length < 8) return null
+
+  let minX = Infinity
+  let maxX = -Infinity
+  for (const i of items) {
+    if (i.x < minX) minX = i.x
+    if (i.x + i.w > maxX) maxX = i.x + i.w
+  }
+  if (maxX - minX < 100) return null
+
+  // 중앙부(30~70%)를 2pt 격자로 스캔: 각 x를 덮는 줄 수가 최소인 지점 = 단 사이 빈 띠.
+  // 프로젝션 최대 갭 방식과 달리 전폭 제목 몇 줄이 있어도 빈 띠를 찾는다.
+  const lo = minX + (maxX - minX) * 0.3
+  const hi = minX + (maxX - minX) * 0.7
+  let cutX = 0
+  let bestCover = Infinity
+  for (let x = lo; x <= hi; x += 2) {
+    let cover = 0
+    for (const line of lines) {
+      if (line.items.some(i => i.x < x && i.x + i.w > x)) cover++
+    }
+    if (cover < bestCover) { bestCover = cover; cutX = x }
+  }
+  // 빈 띠를 15% 넘는 줄이 가로지르면 2단 아님
+  if (bestCover / lines.length > 0.15) return null
+
+  // 줄 다수(55%+)가 컷 양쪽에 모두 텍스트를 가져야 함 (한쪽 들여쓰기 문서 배제).
+  // 55%: 상단 1/3이 전폭 목차인 속기록 1면(57%)까지 포함하는 값 — 코퍼스 전수에서
+  // 타 문서 오발화 0 확인
+  const left: ClusterItem[] = []
+  const right: ClusterItem[] = []
+  let twoSide = 0
+  for (const line of lines) {
+    let hasL = false
+    let hasR = false
+    for (const i of line.items) {
+      if (i.x + i.w <= cutX) { left.push(i); hasL = true }
+      else if (i.x >= cutX) { right.push(i); hasR = true }
+    }
+    if (hasL && hasR) twoSide++
+  }
+  if (twoSide / lines.length < 0.55) return null
+  if (left.length < 5 || right.length < 5) return null
+
+  // 숫자·기호 위주(예산/통계표) 제외
+  const allText = items.map(i => i.text).join("").replace(/\s+/g, "")
+  const digits = (allText.match(/[\d,.%△—-]/g) || []).length
+  if (allText.length === 0 || digits / allText.length > 0.15) return null
+
+  // 각 단: 줄 텍스트 길이 + 마커 밀도 + 폭 + 오른쪽 끝 justify 비율
+  const stats = [left, right].map(side => {
+    let sMinX = Infinity
+    let sMaxR = -Infinity
+    let fsSum = 0
+    const rowEnds = new Map<number, number>()
+    const rowLens = new Map<number, number>()
+    const rowFirst = new Map<number, ClusterItem>()
+    for (const i of side) {
+      if (i.x < sMinX) sMinX = i.x
+      const rgt = i.x + i.w
+      if (rgt > sMaxR) sMaxR = rgt
+      fsSum += i.fontSize
+      const key = Math.round(i.y / 4)
+      rowEnds.set(key, Math.max(rowEnds.get(key) ?? -Infinity, rgt))
+      rowLens.set(key, (rowLens.get(key) ?? 0) + i.text.replace(/\s+/g, "").length)
+      const f = rowFirst.get(key)
+      if (!f || i.x < f.x) rowFirst.set(key, i)
+    }
+    const ends = [...rowEnds.values()].sort((a, b) => a - b)
+    const p85 = ends[Math.floor(ends.length * 0.85)] ?? sMaxR
+    const fs = fsSum / side.length
+    const justified = ends.filter(e => Math.abs(e - p85) <= fs).length / ends.length
+    const lens = [...rowLens.values()]
+    const avgLen = lens.reduce((s, v) => s + v, 0) / (lens.length || 1)
+    const markers = [...rowFirst.values()].filter(i => /^[•▪◦‣∙·\-–—□■◇◆▶※*]/.test(i.text)).length
+    return { width: sMaxR - sMinX, justified, avgLen, markerRatio: markers / (rowFirst.size || 1) }
+  })
+
+  // 양쪽 모두 긴 문장 줄 (진짜 표엔 짧은 라벨/숫자 열 존재)
+  if (stats.some(s => s.avgLen < 12)) return null
+  // 불릿/마커 구조(SWOT 4분면·불릿 리스트) 제외
+  if (stats.some(s => s.markerRatio > 0.1)) return null
+  const widthSym = Math.min(stats[0].width, stats[1].width) / Math.max(stats[0].width, stats[1].width)
+  if (widthSym < 0.6) return null
+  // 본문 단은 마지막 문단 줄을 제외한 대부분 행이 오른쪽 끝까지 채워진다
+  if (Math.min(stats[0].justified, stats[1].justified) < 0.55) return null
+  return cutX
 }
 
 // ─── 균등배분 사전 병합 ──────────────────────────────────

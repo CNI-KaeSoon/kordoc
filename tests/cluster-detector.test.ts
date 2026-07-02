@@ -1,6 +1,6 @@
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { detectClusterTables, type ClusterItem } from "../src/pdf/cluster-detector.js"
+import { detectClusterTables, findTwoColumnProseCutX, type ClusterItem } from "../src/pdf/cluster-detector.js"
 
 /** 헬퍼: 간단한 텍스트 아이템 생성 */
 function item(text: string, x: number, y: number, w = 40, fontSize = 12): ClusterItem {
@@ -57,5 +57,52 @@ describe("detectClusterTables", () => {
 
   it("빈 배열 → 빈 결과", () => {
     assert.deepEqual(detectClusterTables([], 1), [])
+  })
+})
+
+/** 헬퍼: 2단 조판 본문 페이지 시뮬레이션 (국회 속기록류) */
+function twoColumnProsePage(): ClusterItem[] {
+  const items: ClusterItem[] = []
+  // 좌단 x=50~280 / 우단 x=310~540, 각 12줄 — 마지막 줄 빼고 justify
+  for (let r = 0; r < 12; r++) {
+    const y = 700 - r * 20
+    const lastL = r === 11
+    const lastR = r === 5 // 우단 문단 끝 (짧은 줄)
+    items.push({ text: "왼쪽단의본문문장조각입니다" + r, x: 50, y, w: lastL ? 120 : 230, h: 12, fontSize: 12, fontName: "T" })
+    items.push({ text: "오른쪽단의본문문장조각입니다" + r, x: 310, y, w: lastR ? 110 : 230, h: 12, fontSize: 12, fontName: "T" })
+  }
+  return items
+}
+
+describe("findTwoColumnProseCutX (2단 조판 본문 판별)", () => {
+  it("좌우 대칭 justify 본문 → 단 사이 컷 반환", () => {
+    const cutX = findTwoColumnProseCutX(twoColumnProsePage())
+    assert.ok(cutX !== null, "2단 본문으로 판별되어야 함")
+    assert.ok(cutX > 280 && cutX < 310, `컷이 단 사이(280~310)여야 함: ${cutX}`)
+  })
+
+  it("짧은 라벨 열을 가진 진짜 표 → null", () => {
+    const items: ClusterItem[] = []
+    for (let r = 0; r < 12; r++) {
+      const y = 700 - r * 20
+      items.push({ text: "구분" + r, x: 50, y, w: 40, h: 12, fontSize: 12, fontName: "T" })
+      items.push({ text: "내용값" + r, x: 310, y, w: 60, h: 12, fontSize: 12, fontName: "T" })
+    }
+    assert.equal(findTwoColumnProseCutX(items), null, "짧은 셀 표는 본문이 아님")
+  })
+
+  it("숫자 위주 2열(예산표) → null", () => {
+    const items: ClusterItem[] = []
+    for (let r = 0; r < 12; r++) {
+      const y = 700 - r * 20
+      items.push({ text: "1,234,567,890,123", x: 50, y, w: 230, h: 12, fontSize: 12, fontName: "T" })
+      items.push({ text: "9,876,543,210,987", x: 310, y, w: 230, h: 12, fontSize: 12, fontName: "T" })
+    }
+    assert.equal(findTwoColumnProseCutX(items), null, "숫자 표는 본문이 아님")
+  })
+
+  it("detectClusterTables: 2단 조판 본문은 표로 감지하지 않음", () => {
+    const results = detectClusterTables(twoColumnProsePage(), 1)
+    assert.equal(results.length, 0, "2단 본문이 표로 흡수되면 안 됨")
   })
 })
