@@ -243,10 +243,19 @@ export function alignUnits(units, mdKey) {
   const SHORT = 8
   const isShort = i => units[i].text.length > 0 && units[i].text.length < SHORT
 
-  // ── Pass 1: 정확 매칭 (긴 유닛만, 긴 순) ──
+  // ── Pass 1: 정확 매칭 (긴 유닛만, 본문문자 유닛 우선 → 긴 순) ──
   // 긴/고유 유닛이 영역을 먼저 차지하게 하여, 짧은 중복 조각이 긴 유닛의 유일 occurrence를
   // 가로채는 greedy 거짓-누락을 방지한다 (consume 마스킹으로 multiset 1:1은 유지).
-  const order = units.map((_, i) => i).sort((a, b) => units[b].text.length - units[a].text.length)
+  // 마스킹-only 유닛(별표/구두점, recall 모수 제외 대상)은 본문문자 유닛 뒤로 —
+  // 인접 마스킹 문단이 normKey 공백 제거로 한 덩어리가 되면, 길이만 큰 마스킹 유닛이
+  // "가.+별표" 유닛의 별표 구간을 먼저 소비해 앞머리 2자 거짓 miss를 만든다.
+  const hasContent = i => /[\p{L}\p{N}]/u.test(units[i].text)
+  const order = units.map((_, i) => i).sort((a, b) => {
+    const ca = hasContent(a) ? 0 : 1
+    const cb = hasContent(b) ? 0 : 1
+    if (ca !== cb) return ca - cb
+    return units[b].text.length - units[a].text.length
+  })
   for (const i of order) {
     const u = units[i]
     const t = u.text
