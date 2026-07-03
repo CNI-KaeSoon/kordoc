@@ -334,7 +334,29 @@ function parseTable(
   )
 
   const table = buildTable(cellRows)
+
+  // 표 캡션(SHAPEOBJECT > CAPTION) — 파서가 이제껏 버리던 도형 캡션 텍스트를
+  // 별도 문단으로 보존한다. collectCharText가 SHAPEOBJECT를 통째로 스킵해
+  // 표 주석("※ …참조" 등)이 소실됐다. Side=Top/Left면 표 앞, 그 외는 뒤.
+  const caption = extractShapeCaption(el)
+  if (caption.text && caption.before) {
+    blocks.push({ type: "paragraph", text: caption.text, pageNumber: sectionNum })
+  }
   blocks.push({ type: "table", table, pageNumber: sectionNum })
+  if (caption.text && !caption.before) {
+    blocks.push({ type: "paragraph", text: caption.text, pageNumber: sectionNum })
+  }
+}
+
+/** 표의 SHAPEOBJECT > CAPTION 텍스트 + 배치(Side) 추출 */
+function extractShapeCaption(tableEl: Element): { text: string; before: boolean } {
+  const shape = findChild(tableEl, "SHAPEOBJECT")
+  const caption = shape && findChild(shape, "CAPTION")
+  if (!caption) return { text: "", before: false }
+  const parts: string[] = []
+  collectCellText(caption, parts, 0)
+  const side = caption.getAttribute("Side") ?? ""
+  return { text: parts.filter(Boolean).join("\n").trim(), before: side === "Top" || side === "Left" }
 }
 
 /** 셀 내부 텍스트 추출 — PARALIST > P 재귀, 중첩 테이블은 평탄화 */
