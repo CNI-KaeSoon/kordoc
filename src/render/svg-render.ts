@@ -597,7 +597,8 @@ export async function renderHwpxToSvg(input: ArrayBuffer | Uint8Array, options?:
     drawPara(p, ML, MT, BODY_W, ctx, 0)
   }
 
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${pt(PW)} ${pt(PH)}" width="${pt(PW)}" height="${pt(PH)}" font-family="'HCR Batang','함초롬바탕','Hancom Batang',AppleMyungjo,'Noto Serif CJK KR',serif" xml:space="preserve">\n` +
+  // width/height는 pt 단위 명시 — 단위 없는 px로 두면 A4 실물(96dpi 기준)보다 25% 작게 보인다
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${pt(PW)} ${pt(PH)}" width="${pt(PW)}pt" height="${pt(PH)}pt" font-family="'HCR Batang','함초롬바탕','Hancom Batang',AppleMyungjo,'Noto Serif CJK KR',serif" xml:space="preserve">\n` +
     `<rect width="100%" height="100%" fill="white"/>\n${ctx.svg.join("\n")}\n</svg>`
   return { svg, width: Math.round(PW) / 100, height: Math.round(PH) / 100, warnings, stats: ctx.stats }
 }
