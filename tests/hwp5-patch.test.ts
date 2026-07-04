@@ -358,6 +358,17 @@ describe("splitParaText — PARA_TEXT 분해 무손실/안전", () => {
     assert.equal(seg!.prefixUnits, 0)
     assert.equal(seg!.suffixUnits, 0)
   })
+
+  it("코어 중간 강제 줄바꿈(0x0a)도 코어로 무손실 분해 (다중줄 지원)", () => {
+    const data = Buffer.concat([utf16("가나"), Buffer.from([0x0a, 0x00]), utf16("다라"), Buffer.from([0x0d, 0x00])])
+    const seg = splitParaText(data)
+    assert.ok(seg)
+    assert.equal(seg.core, "가나\n다라")
+    assert.equal(seg.prefixUnits, 0)
+    assert.equal(seg.suffixUnits, 1)
+    const re = Buffer.concat([seg.prefix, Buffer.from(seg.core, "utf16le"), seg.suffix])
+    assert.ok(re.equals(data), "무손실 재조립")
+  })
 })
 
 describe("patchHwp — 빈 셀 채우기", () => {
@@ -432,6 +443,71 @@ describe("patchHwp — 빈 셀 채우기", () => {
       assert.ok(re.includes("채운값"), `채움 반영: ${re}`)
       assert.ok(re.includes("머리글") && re.includes("오른쪽"), "미수정 셀 보존")
     }
+  })
+})
+
+describe("patchHwp — 셀 다중줄 (강제 줄바꿈 0x0a)", () => {
+  it("GFM 단일 문단 셀을 <br> 다중줄 값으로 채움 — 한 문단 안 강제 줄바꿈", async () => {
+    const hwp = buildHwp([table2x2([["주소", "서울"], ["점수", "80"]])])
+    const md = parseHwp5Document(Buffer.from(hwp)).markdown
+    assert.ok(md.includes("| 주소 | 서울 |"), `렌더 확인: ${md}`)
+    const r = await patchHwp(hwp, md.replace("| 주소 | 서울 |", "| 주소 | 서울시 강남구<br>테헤란로 123 |"))
+    assert.equal(r.success, true, `${JSON.stringify(r.skipped)}`)
+    assert.equal(r.applied, 1, `${JSON.stringify(r.skipped)}`)
+    const re = parseHwp5Document(Buffer.from(r.data!)).markdown
+    assert.ok(re.includes("서울시 강남구<br>테헤란로 123"), `다중줄 반영: ${re}`)
+    assert.ok(re.includes("| 점수 | 80 |"), "미수정 셀 보존")
+  })
+
+  it("다중줄 채움 PARA_TEXT는 강제 줄바꿈을 0x000a 2바이트로 기록 + nChars 정합", async () => {
+    const hwp = buildHwp([table2x2([["주소", "서울"], ["점수", "80"]])])
+    const md = parseHwp5Document(Buffer.from(hwp)).markdown
+    const r = await patchHwp(hwp, md.replace("| 주소 | 서울 |", "| 주소 | 가나<br>다라 |"))
+    assert.equal(r.applied, 1, `${JSON.stringify(r.skipped)}`)
+    const cfb = CFB.parse(Buffer.from(r.data!))
+    const stream = Buffer.from(CFB.find(cfb, "/BodyText/Section0").content)
+    const recs = readRecords(stream)
+    const idx = recs.findIndex(rc => rc.tagId === TAG_PARA_TEXT && rc.data.toString("utf16le").startsWith("가나"))
+    assert.ok(idx > 0, "채워진 PARA_TEXT를 찾지 못함")
+    assert.equal(recs[idx].data.toString("utf16le"), "가나\n다라\r")  // 0x0a=\n, 0x0d=\r
+    assert.equal(recs[idx].data.readUInt16LE(4), 0x000a, "3번째 WCHAR가 강제 줄바꿈 0x000a")
+    assert.equal(recs[idx - 1].data.readUInt32LE(0), 6, "nChars = 5글자 + 문단끝 1")
+  })
+
+  it("HTML 병합셀에 줄 추가 — 넘치는 줄을 마지막 문단에 강제 줄바꿈으로 병합", async () => {
+    const hwp = buildHwp([tableMerged("머리글", "왼쪽", "오른쪽")])
+    const md = parseHwp5Document(Buffer.from(hwp)).markdown
+    assert.ok(md.includes("<td>오른쪽</td>"), `HTML 렌더 확인: ${md}`)
+    const r = await patchHwp(hwp, md.replace("<td>오른쪽</td>", "<td>오른쪽<br>둘째줄</td>"))
+    assert.equal(r.success, true, `${JSON.stringify(r.skipped)}`)
+    assert.equal(r.applied, 1, `${JSON.stringify(r.skipped)}`)
+    const re = parseHwp5Document(Buffer.from(r.data!)).markdown
+    assert.ok(re.includes("오른쪽") && re.includes("둘째줄"), `병합 반영: ${re}`)
+  })
+
+  it("이미 다중줄인 셀(0x0a 포함)의 no-op 패치는 바이트 동일", async () => {
+    const hwp = buildHwp([table2x2([["주소", "가나\n다라"], ["점수", "80"]])])
+    const md = parseHwp5Document(Buffer.from(hwp)).markdown
+    assert.ok(md.includes("가나<br>다라"), `다중줄 렌더 확인: ${md}`)
+    const r = await patchHwp(hwp, md)
+    assert.equal(r.success, true)
+    assert.equal(r.applied, 0)
+    assert.deepEqual(Buffer.from(r.data!), Buffer.from(hwp), "no-op 바이트 불변")
+  })
+
+  it("순수 줄바꿈 삽입(같은 단어) — 정확 비교로 감지(normForMatch로 스킵 안 함)", async () => {
+    const hwp = buildHwp([table2x2([["주소", "강남구 테헤란로"], ["점수", "80"]])])
+    const md = parseHwp5Document(Buffer.from(hwp)).markdown
+    assert.ok(md.includes("| 주소 | 강남구 테헤란로 |"), `렌더 확인: ${md}`)
+    const r = await patchHwp(hwp, md.replace("| 주소 | 강남구 테헤란로 |", "| 주소 | 강남구<br>테헤란로 |"))
+    assert.equal(r.success, true, `${JSON.stringify(r.skipped)}`)
+    assert.equal(r.applied, 1, `줄바꿈만 추가돼도 적용돼야 함: ${JSON.stringify(r.skipped)}`)
+    const cfb = CFB.parse(Buffer.from(r.data!))
+    const stream = Buffer.from(CFB.find(cfb, "/BodyText/Section0").content)
+    const recs = readRecords(stream)
+    const idx = recs.findIndex(rc => rc.tagId === TAG_PARA_TEXT && rc.data.toString("utf16le").startsWith("강남구"))
+    assert.ok(idx > 0, "채워진 PARA_TEXT를 찾지 못함")
+    assert.equal(recs[idx].data.toString("utf16le"), "강남구\n테헤란로\r")  // 공백이 0x0a로 대체
   })
 })
 

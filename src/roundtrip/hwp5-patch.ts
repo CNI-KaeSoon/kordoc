@@ -603,6 +603,21 @@ function patchGfmCells(
       // (단일 문단 셀도 분할 1개로 동일 경로. 문단 수가 다르면 추가/삭제이므로 미지원.)
       const beforeParts = origRows[r][c].split(/<br\s*\/?>/i)
       const afterParts = editedRows[r][c].split(/<br\s*\/?>/i)
+      // 단일 문단 셀: <br>로 나뉜 여러 줄을 문단 추가 없이 한 문단 안 강제 줄바꿈(\n)으로 채운다.
+      // (다중 문단 셀은 아래 1:1 매핑 유지 — 문단 구조를 보존해야 하므로.)
+      if (cell.paras.length === 1) {
+        const beforeEach = beforeParts.map(gfmCellToPlain)
+        const afterEach = afterParts.map(gfmCellToPlain)
+        if (beforeEach.some(p => p === null) || afterEach.some(p => p === null)) { cellSkip("서식/링크/이미지 포함 셀 수정은 미지원 (v1)"); continue }
+        const before = beforeEach.join("\n")
+        const after = afterEach.join("\n")
+        if (before === after) continue
+        const para = cell.paras[0]
+        if (normForMatch(para.rawText) !== normForMatch(before)) { cellSkip("셀 텍스트 불일치 — 소스맵 신뢰 불가"); continue }
+        if (afterEach.some(l => sanitizeText(l!) !== l)) { cellSkip("공백 정규화 불안정 텍스트 — 미지원"); continue }
+        applied += stageParaPatch(ctx.scans[para.sectionIndex], para, after, cellSkip)
+        continue
+      }
       if (beforeParts.length !== cell.paras.length || afterParts.length !== cell.paras.length) {
         cellSkip("셀 문단 수 변경 — 미지원 (문단 추가/삭제)"); continue
       }
@@ -776,19 +791,19 @@ function applyCellEdit5(
   const targets = nonEmpty.length > 0 ? nonEmpty : cell.paras
   if (targets.length === 0) return skip("셀에 문단이 없음 — 미지원")
 
-  // 라인 → 문단 순서 매핑 (넘치는 줄은 마지막 문단에 병합, 줄어든 줄은 비움)
+  // 라인 → 문단 순서 매핑 (넘치는 줄은 마지막 문단에 강제 줄바꿈으로 병합, 줄어든 줄은 비움)
   const assigned: string[] = []
   for (let i = 0; i < targets.length; i++) {
     if (i < newLines.length) {
       assigned.push(i === targets.length - 1 && newLines.length > targets.length
-        ? newLines.slice(i).join(" ")
+        ? newLines.slice(i).join("\n")
         : newLines[i])
     } else {
       assigned.push("")
     }
   }
   if (newLines.length > targets.length) {
-    ctx.skipped.push({ reason: "셀 내 줄 추가는 문단 생성 미지원 — 마지막 문단에 병합 적용", after: summarize(after), partial: true })
+    ctx.skipped.push({ reason: "셀 내 추가 줄을 마지막 문단에 강제 줄바꿈으로 병합(문단 생성 대신)", after: summarize(after), partial: true })
   } else if (newLines.length < nonEmpty.length && nonEmpty.length > 1) {
     ctx.skipped.push({ reason: "셀 내 줄 삭제는 문단 제거 미지원 — 빈 문단 잔존(뷰어에 빈 줄 표시 가능)", before: summarize(before), after: summarize(after), partial: true })
   }
@@ -816,8 +831,8 @@ function gfmCellToPlain(md: string): string | null {
 
 /**
  * PARA_TEXT를 [선두 비가시 control][순수 텍스트 코어][말미 비가시 control/문단끝]로 분해.
- * - 코어는 0x20+ 일반 문자(서로게이트 포함)만. 탭·하이픈·NBSP·줄바꿈 등 "가시 control"이
- *   코어 안이나 가장자리에 있으면 텍스트 재매핑이 모호하므로 null(미지원).
+ * - 코어는 0x20+ 일반 문자(서로게이트 포함)와 강제 줄바꿈(0x000a)만. 탭·하이픈·NBSP 등 그 외
+ *   "가시 control"이 코어 안이나 가장자리에 있으면 텍스트 재매핑이 모호하므로 null(미지원).
  * - 선두/말미에는 개체 앵커(0x0b)·필드(0x03/0x04)·자동번호 등 "비가시 control"과 문단끝(0x0d)만 허용.
  * appendParaText(record.ts)의 바이트 전진 규칙을 그대로 미러한다 — 어긋나면 한컴 변조감지.
  */
@@ -854,7 +869,7 @@ export function splitParaText(data: Buffer):
           i += 16; toks.push({ start, end: i, units: 1, plain: false, visible: false })  // 수식 등 비가시
         } else {
           // bare 0x000a = 2바이트 줄바꿈. 14바이트 소비 금지(appendParaText와 대칭 — 어긋나면 한컴 변조감지).
-          toks.push({ start, end: i, units: 1, plain: false, visible: true })            // "\n" 가시, 2바이트
+          toks.push({ start, end: i, units: 1, plain: true, visible: true })            // "\n" 가시, 2바이트
         }
         break
       default: {
@@ -936,7 +951,9 @@ function stageParaPatch(
   if (para.rangeTagCount > 0) return skip("범위 태그(형광펜/교정부호) 문단 — 미지원 (v1)")
   if (para.charShapeIdx < 0 || para.lineSegIdx < 0) return skip("문단 레코드 구성 비정형 — 미지원")
   if (scan.repl.has(para.headerIdx)) return skip("동일 문단 중복 수정 — 첫 수정만 적용")
-  if (/[\u0000-\u001f]/.test(newPlain)) return skip("새 텍스트에 제어문자 포함 — 미지원")
+  // \n(0x000a, 강제 줄바꿈)은 허용 — 코어에 2바이트 char 컨트롤로 기록해 다중줄 값을 지원한다.
+  // 그 외 제어문자(탭·필드·특수공백 등)는 재매핑이 모호하므로 거부.
+  if (/[\u0000-\u0009\u000b-\u001f]/.test(newPlain)) return skip("새 텍스트에 제어문자 포함 — 미지원")
 
   const records = scan.records
   const headerRec = records[para.headerIdx]
