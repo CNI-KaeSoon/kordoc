@@ -248,11 +248,11 @@ export function blocksToMarkdown(blocks: IRBlock[]): string {
   for (let i = 0; i < blocks.length; i++) {
     const block = blocks[i]
 
-    // 헤딩 블록
+    // 헤딩 블록 — escapeGfm 필수: 마스킹 별표("홍**")가 볼드로 소비·삭제되는 것 방지
     if (block.type === "heading" && block.text) {
       const prefix = "#".repeat(Math.min(block.level || 2, 6))
       const headingText = sanitizeText(block.text)
-      if (headingText) lines.push("", `${prefix} ${headingText}`, "")
+      if (headingText) lines.push("", `${prefix} ${escapeGfm(headingText)}`, "")
       continue
     }
 
@@ -275,11 +275,11 @@ export function blocksToMarkdown(blocks: IRBlock[]): string {
       // 텍스트가 이미 번호로 시작하면 그대로 출력 (원래 번호 보존)
       const alreadyNumbered = block.listType === "ordered" && /^\d+\.\s/.test(listText)
       const prefix = alreadyNumbered ? "" : block.listType === "ordered" ? "1. " : "- "
-      lines.push(`${prefix}${listText}`)
+      lines.push(`${prefix}${escapeGfm(listText)}`)
       if (block.children) {
         for (const child of block.children) {
           const childPrefix = child.listType === "ordered" ? "1." : "-"
-          lines.push(`  ${childPrefix} ${child.text || ""}`)
+          lines.push(`  ${childPrefix} ${escapeGfm(child.text || "")}`)
         }
       }
       continue

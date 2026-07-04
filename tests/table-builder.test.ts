@@ -204,3 +204,20 @@ describe("convertTableToText", () => {
     assert.equal(text, "A")
   })
 })
+
+describe("blocksToMarkdown — 마스킹 별표 보호 (리뷰 #9)", () => {
+  it("heading의 별표가 볼드로 소비되지 않는다", () => {
+    const md = blocksToMarkdown([{ type: "heading", level: 1, text: "신청자 홍** 김**" }])
+    assert.ok(md.includes("홍\\*\\*"), md)
+    assert.ok(md.includes("김\\*\\*"), md)
+  })
+
+  it("list 본문·자식의 별표가 이스케이프된다", () => {
+    const md = blocksToMarkdown([{
+      type: "list", listType: "bullet", text: "성명 홍**",
+      children: [{ type: "list", listType: "bullet", text: "연락처 010-****-1234" }],
+    } as IRBlock])
+    assert.ok(md.includes("홍\\*\\*"), md)
+    assert.ok(md.includes("\\*\\*\\*\\*-1234"), md)
+  })
+})

@@ -268,3 +268,73 @@ describe("DOCX 파서", () => {
       `경고 목록: ${JSON.stringify(result.warnings)}`)
   })
 })
+
+describe("DOCX vMerge continue 셀 내용 보존 (리뷰 #18)", () => {
+  it("위 셀이 있는 continue 셀 내용은 시작 셀로 합류한다", async () => {
+    const buffer = await createDocx(`
+      <w:tbl>
+        <w:tr><w:tc><w:p><w:r><w:t>A1</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc></w:tr>
+        <w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p><w:r><w:t>고아내용</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B2</w:t></w:r></w:p></w:tc></w:tr>
+      </w:tbl>
+    `)
+    const result = await parse(buffer)
+    assert.equal(result.success, true)
+    if (!result.success) return
+    assert.ok(result.markdown.includes("고아내용"), `continue 셀 내용 소실: ${result.markdown}`)
+  })
+
+  it("첫 행 고아 continue 셀은 일반 셀로 승격한다", async () => {
+    const buffer = await createDocx(`
+      <w:tbl>
+        <w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p><w:r><w:t>첫행고아</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc></w:tr>
+      </w:tbl>
+    `)
+    const result = await parse(buffer)
+    assert.equal(result.success, true)
+    if (!result.success) return
+    assert.ok(result.markdown.includes("첫행고아"), `고아 continue 셀 소실: ${result.markdown}`)
+  })
+
+  it("정상 병합(restart + 빈 continue)은 기존대로 rowSpan 흡수", async () => {
+    const buffer = await createDocx(`
+      <w:tbl>
+        <w:tr><w:tc><w:tcPr><w:vMerge w:val="restart"/></w:tcPr><w:p><w:r><w:t>병합시작</w:t></w:r></w:p></w:tc><w:tc><w:p><w:r><w:t>B1</w:t></w:r></w:p></w:tc></w:tr>
+        <w:tr><w:tc><w:tcPr><w:vMerge/></w:tcPr><w:p></w:p></w:tc><w:tc><w:p><w:r><w:t>B2</w:t></w:r></w:p></w:tc></w:tr>
+      </w:tbl>
+    `)
+    const result = await parse(buffer)
+    assert.equal(result.success, true)
+    if (!result.success) return
+    assert.ok(result.markdown.includes("병합시작"))
+    assert.ok(result.markdown.includes('rowspan="2"'), `rowSpan 병합 깨짐: ${result.markdown}`)
+  })
+})
+
+describe("DOCX 텍스트박스 수식 이중 방출 방지 (리뷰 #19)", () => {
+  it("텍스트박스 안 수식은 텍스트박스 블록에서 1회만 나온다", async () => {
+    const math = `<m:oMath xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math"><m:r><m:t>E=mc</m:t></m:r></m:oMath>`
+    const buffer = await createDocx(`
+      <w:p>
+        <w:r>
+          <mc:AlternateContent xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006">
+            <mc:Choice Requires="wps">
+              <w:drawing><wps:txbx xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+                <w:txbxContent><w:p><w:r><w:t>박스텍스트</w:t></w:r>${math}</w:p></w:txbxContent>
+              </wps:txbx></w:drawing>
+            </mc:Choice>
+            <mc:Fallback>
+              <w:pict><v:textbox xmlns:v="urn:schemas-microsoft-com:vml">
+                <w:txbxContent><w:p><w:r><w:t>박스텍스트</w:t></w:r>${math}</w:p></w:txbxContent>
+              </v:textbox></w:pict>
+            </mc:Fallback>
+          </mc:AlternateContent>
+        </w:r>
+      </w:p>
+    `)
+    const result = await parse(buffer)
+    assert.equal(result.success, true)
+    if (!result.success) return
+    const count = (result.markdown.match(/E=mc/g) ?? []).length
+    assert.equal(count, 1, `수식이 ${count}회 방출됨 (기대 1): ${result.markdown}`)
+  })
+})

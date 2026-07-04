@@ -235,6 +235,9 @@ function collectOmmlRoots(p: Element): Element[] {
       if (tag === "oMath" || tag === "oMathPara") {
         out.push(el)
         // 내부는 재귀하지 않음 (oMathPara 안의 oMath 중복 방지)
+      } else if (tag === "txbxContent" || tag === "Fallback") {
+        // 텍스트박스 내용은 별도 블록으로 처리되고 mc:Fallback은 mc:Choice의 사본 —
+        // 여기서 재귀하면 같은 수식이 앵커 문단 + 텍스트박스 블록으로 이중/삼중 방출
       } else {
         walk(el)
       }
@@ -454,13 +457,31 @@ function parseTable(
           vMerge = getAttr(vMergeEls[0], "val") === "restart" ? "restart" : "continue"
         }
       }
-      const text = vMerge === "continue"
-        ? ""
-        : collectCellText(tc, styles, numbering, footnotes, rels, 0).join("\n")
+      // continue 셀도 텍스트를 수집한다 — 정상 Word는 빈 문단이지만 손상·타 생성기
+      // docx는 내용이 있을 수 있고, 버리면 무음 소실 (리뷰 #18)
+      const text = collectCellText(tc, styles, numbering, footnotes, rels, 0).join("\n")
       row.push({ col, colSpan, vMerge, text })
       col += colSpan
     }
     rawRows.push(row)
+  }
+
+  // 내용 있는 continue 셀 보존: 위쪽 시작 셀이 있으면 텍스트 합류, 없으면(restart
+  // 없는 고아 continue) 일반 셀로 승격해 병합 흡수에서 제외
+  for (let r = 0; r < rawRows.length; r++) {
+    for (const cell of rawRows[r]) {
+      if (cell.vMerge !== "continue" || !cell.text) continue
+      let start: RawDocxCell | undefined
+      for (let pr = r - 1; pr >= 0 && !start; pr--) {
+        start = rawRows[pr].find(pc => pc.col === cell.col && pc.vMerge !== "continue")
+      }
+      if (start) {
+        start.text = start.text ? `${start.text}\n${cell.text}` : cell.text
+        cell.text = ""
+      } else {
+        cell.vMerge = null
+      }
+    }
   }
 
   // vMerge 계속 셀은 같은 그리드 열의 시작 셀 rowSpan으로 흡수

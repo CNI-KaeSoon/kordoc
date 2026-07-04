@@ -471,7 +471,8 @@ program
       const t = line.trim()
       if (!t) continue
       let req: { id?: number; cmd?: string; file?: string; out?: string; reflow?: boolean; reflowMode?: string; highlight?: string[] }
-      try { req = JSON.parse(t) } catch { continue }
+      // 비JSON 라인도 응답은 낸다 — 무음 삼킴이면 id 대기 클라이언트가 영구 행
+      try { req = JSON.parse(t) } catch { write({ ok: false, error: "잘못된 JSON 라인" }); continue }
       if (req.cmd === "quit") break
       const id = req.id
       try {
