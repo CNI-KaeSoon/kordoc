@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [3.15.0] - 2026-07-04
+## [3.15.0] - 2026-07-05
 
 ### Added
 
@@ -29,6 +29,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - `RenderStyles`에 `paraGeom`(줄간격·여백) 추가 — reflow 세로 조판용. 기존 파싱 무영향.
+- **HWP5 다중줄 채움/수정** — 표 셀·본문 문단·빈 문단에 `<br>` 표기로 강제 줄바꿈
+  (0x000a) 값을 채운다. LINE_SEG를 줄 수만큼 합성해 한컴이 실제 여러 줄로 렌더
+  (1세그면 flat 렌더되는 실측 반영). 본문 문단의 다중줄 수정은 `<br>` 명시 시에만.
+- **양식 채움 서식엔진** — `fill_form`에 `formats`(date:yy.mm.dd·phone:hyphen·
+  rrn:masked·`#` 숫자마스크·자유 패턴), `require_unique`(모호 라벨 거부),
+  `mask_values`(응답 값 마스킹 + 재파싱 FILLED 검증) 추가.
+- `prepublishOnly`에 `bench:gate` 편입 — 발행 전 정확도 게이트 강제. 게이트에
+  트랙별 모수 하한·표 순서구제(reordered) 무증가 플로어 추가.
+- `bench:visual` 신설 — 로컬 한컴 실렌더 캡처를 aHash로 대조하는 시각 게이트
+  (macOS GUI 전용, 발행 전 수동 1회).
+
+### Fixed
+
+- **HWP5 파서: 강제 줄바꿈(0x000a) 뒤 7글자 증발** — 코드 10을 확장 컨트롤로
+  오분류해 14바이트를 소비하던 자료손상. 패치 경로(`splitParaText`)도 대칭 수정.
+- **DOCX 병합표 `gridBefore` 미처리** — 행 앞 건너뛴 그리드 열을 읽지 않아 셀이
+  왼쪽 열로 무음 오배치되던 자료손상.
+- **PDF 개방변 표 합성의 상하 표 용접** — y-간격 무제한 그룹핑이 스택된 두 표를
+  하나로 합치고 사이 본문을 흡수하던 자료손상.
+- reflow: 셀 콘텐츠로 자란 표의 실효 높이를 반영 — 표 뒤 문단이 표 위에 겹치던
+  문제 해소 (`measureTableHeight`, 한컴 실렌더 대조 검증).
+- reflow: 캐시 감지를 태그 마크업 매치로 — 본문에 "linesegarray" 단어가 있으면
+  전면 백지가 되던 오판 해소. 렌더 이미지 개수·누적 캡 + dataURI defs 1회 참조로
+  반복 참조 문서 OOM 차단. 탭을 8슬롯 인라인 컨트롤로 정정(줄 경계 밀림).
+- 수식: `over`/`root`/`of` 부분문자열 오파싱으로 왕복이 붕괴하던 문제 —
+  리터럴/`\text{}` 마스킹 + 토큰 경계 스캔. LaTeX 공백 매크로(`\,` 등)가
+  리터럴 구두점으로 렌더되던 주입 제거.
+- 마스킹 별표가 heading/list 왕복에서 볼드로 소비·삭제되던 escapeGfm 누락.
+- DOCX: restart 없는 vMerge continue 셀 내용 보존, 텍스트박스 수식 이중 방출 방지.
+- PDF: 음영 스택 필터가 패딩 0 글상자의 실제 테두리를 삼키던 문제(말단 이질줄 트리밍).
+- render-worker: 비JSON 라인에 `{ok:false}` 응답 (무응답 행 방지).
 
 ## [3.14.0] - 2026-07-04
 
