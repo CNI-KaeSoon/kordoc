@@ -6,8 +6,9 @@
 
 import { describe, it } from "node:test"
 import assert from "node:assert/strict"
-import { formatFillValue, fillWithUniqueGuard, normalizeValues } from "../src/form/match.js"
+import { formatFillValue, fillWithUniqueGuard, normalizeValues, normalizeLabel } from "../src/form/match.js"
 import { fillFormFields } from "../src/form/filler.js"
+import { markdownToHwpx, fillHwpx, parse } from "../src/index.js"
 import type { IRBlock, IRTable } from "../src/types.js"
 
 function makeTable(rows: string[][]): IRTable {
@@ -20,6 +21,10 @@ function makeTable(rows: string[][]): IRTable {
 }
 
 const tableBlock = (t: IRTable): IRBlock => ({ type: "table", table: t })
+
+function toAB(b: ArrayBuffer | Uint8Array): ArrayBuffer {
+  return b instanceof ArrayBuffer ? b : (b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength) as ArrayBuffer)
+}
 
 describe("formatFillValue — 값 서식 변환", () => {
   it("date: 토큰 치환 (yyyy/yy/mm/dd + 선행 0 제거 m/d)", () => {
@@ -42,8 +47,9 @@ describe("formatFillValue — 값 서식 변환", () => {
     assert.equal(formatFillValue("9003151234567", "rrn:front"), "900315")
   })
 
-  it("# 숫자마스크 — 리터럴 통과, 숫자만 소비", () => {
-    assert.equal(formatFillValue("1234567890123", "mask:###-##-#####"), "123-45-67890")
+  it("# 숫자마스크 — 리터럴 통과, 숫자만 소비 (정확 자릿수)", () => {
+    // sfill-6: # 개수와 숫자 개수가 정확히 일치할 때만 마스크한다 (초과분 무음 폐기 금지)
+    assert.equal(formatFillValue("1234567890", "mask:###-##-#####"), "123-45-67890")
     assert.equal(formatFillValue("01012345678", "###-####-####"), "010-1234-5678") // 자유 패턴
   })
 
@@ -108,5 +114,76 @@ describe("fillWithUniqueGuard — 모호 라벨 거부", () => {
     )
     assert.deepEqual(r.rejected, [])
     assert.equal(r.filled[0].value, "1990년 3월 15일")
+  })
+})
+
+describe("formatFillValue — 서식 엣지 회귀 (sfill-3~6)", () => {
+  it("sfill-3: 미패딩 날짜(구분자 3토큰) 정상 해석 + 월/일 범위검증", () => {
+    assert.equal(formatFillValue("2026.7.5", "date:yyyy-mm-dd"), "2026-07-05")
+    assert.equal(formatFillValue("2026년 7월 5일", "date:yyyy-mm-dd"), "2026-07-05")
+    assert.equal(formatFillValue("2026.12.5", "date:yyyy-mm-dd"), "2026-12-05")
+    // 6자리 순수숫자에서 mm=26 은 범위 밖 → 쓰레기 날짜 대신 원형(fail-open)
+    assert.equal(formatFillValue("202675", "date:yyyy-mm-dd"), "202675")
+  })
+  it("sfill-4: 대소문자 혼용(yyyy-MM-dd) 수용 + 영문 리터럴 보존", () => {
+    assert.equal(formatFillValue("19900315", "yyyy-MM-dd"), "1990-03-15")
+    assert.equal(formatFillValue("19900315", "date:yyyy-MM-dd"), "1990-03-15")
+    assert.equal(formatFillValue("19900315", "date:yyyy-mm-dd (amended)"), "1990-03-15 (amended)")
+  })
+  it("sfill-5: 서울 02 는 2자리 지역번호", () => {
+    assert.equal(formatFillValue("0212345678", "phone:hyphen"), "02-1234-5678")
+    assert.equal(formatFillValue("021234567", "phone:hyphen"), "02-123-4567")
+    assert.equal(formatFillValue("0212345678", "phone:intl"), "+82-2-1234-5678")
+  })
+  it("sfill-6: 자릿수 불일치·빈 결과는 원형 (무음 왜곡/삭제 금지)", () => {
+    assert.equal(formatFillValue("123456789", "mask:###-##-#####"), "123456789") // 부족
+    assert.equal(formatFillValue("12345678901", "mask:###-##-#####"), "12345678901") // 초과
+    assert.equal(formatFillValue("500000", "#,###,###"), "500000") // 자유패턴 자릿수 불일치
+    assert.equal(formatFillValue("01012345678", "mask"), "01012345678") // 스타일 없는 mask
+    assert.equal(formatFillValue("홍길동", "digits"), "홍길동") // 숫자 없는 digits
+  })
+})
+
+describe("fillWithUniqueGuard — hwpx 경로 & 접두사 오염 (sfill-1/2)", () => {
+  it("sfill-1: hwpx-preserve 경로에서 성명 2곳 매칭 → rejected (전략 key 배선)", async () => {
+    const md = "| 성명 |  |\n|---|---|\n\n중간 본문\n\n| 성명 |  |\n|---|---|\n"
+    const ab = toAB(await markdownToHwpx(md))
+    const r = await fillWithUniqueGuard({ 성명: "홍길동" }, (vals, blocked) => fillHwpx(ab, vals, blocked))
+    assert.deepEqual(r.rejected, ["성명"])
+    assert.equal(r.filled.length, 0, "거부된 성명은 어느 표에도 채워지지 않아야")
+  })
+  it("sfill-2: 주소지 거부 후 그 셀이 '주소' 값으로 오염되지 않는다", async () => {
+    const blocks: IRBlock[] = [
+      tableBlock(makeTable([["주소", ""]])),
+      tableBlock(makeTable([["주소지", ""]])),
+      tableBlock(makeTable([["주소지", ""]])),
+    ]
+    const r = await fillWithUniqueGuard(
+      { 주소: "서울시 강남구 A", 주소지: "부산시 해운대 B" },
+      (vals, blocked) => fillFormFields(blocks, vals, blocked),
+    )
+    assert.deepEqual(r.rejected, ["주소지"])
+    // 거부된 주소지 셀에 남의 값(서울…)이 접두사 매칭으로 들어가면 안 됨
+    assert.ok(
+      !r.filled.some(f => normalizeLabel(f.label).includes("주소지")),
+      "주소지 셀은 어떤 값도 채워지지 않아야 (오염 차단)",
+    )
+    assert.ok(r.filled.some(f => f.key === "주소" && f.value.startsWith("서울")), "주소는 정상 채움")
+  })
+})
+
+describe("mask_values verify 정규화 (sfill-7)", () => {
+  it("escape되는 * 포함 rrn:masked 값이 정규화 비교로 FILLED 매칭된다", async () => {
+    const md = "| 주민등록번호 |  |\n|---|---|\n"
+    const ab = toAB(await markdownToHwpx(md))
+    const res = await fillHwpx(ab, { 주민등록번호: { value: "9003151234567", format: "rrn:masked" } })
+    assert.equal(res.filled.length, 1, "주민등록번호 채워짐")
+    const val = res.filled[0].value // '900315-1******'
+    const reparsed = await parse(Buffer.from(res.buffer))
+    assert.ok(reparsed.success)
+    // mcp verify 와 동일한 정규화 (마크다운 이스케이프 해제 + 공백 접기)
+    const norm = (s: string): string => s.replace(/\\([\\`*_{}[\]()#+.!|~>-])/g, "$1").replace(/\s+/g, " ")
+    assert.equal(reparsed.markdown.includes(val), false, "raw 비교는 * 이스케이프로 false negative(원 결함)")
+    assert.ok(norm(reparsed.markdown).includes(norm(val)), "정규화 비교는 FILLED 로 매칭(수정)")
   })
 })

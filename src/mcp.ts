@@ -461,14 +461,19 @@ server.tool(
 
         const inputs = buildFillInputs(fields, formats)
         const hwpxResult = require_unique
-          ? await fillWithUniqueGuard(inputs, vals => fillHwpx(buffer, vals))
+          ? await fillWithUniqueGuard(inputs, (vals, blocked) => fillHwpx(buffer, vals, blocked))
           : { ...(await fillHwpx(buffer, inputs)), rejected: [] as string[] }
         // 마스킹 verify — 채운 결과를 재파싱해 값이 실제 문서에 있는지만 확인 (값 미노출)
         let verifyLine: string | null = null
         if (mask_values && hwpxResult.filled.length > 0) {
           const reparsed = await parse(Buffer.from(hwpxResult.buffer))
+          // 마크다운 이스케이프(\*,\|,\~ 등)·개행/연속공백 정규화 후 비교 — rrn:masked
+          // ('900315-1******')의 * 이스케이프로 생기던 결정적 false negative 방지.
+          // 빈 값은 includes('')===true 로 항상 통과하던 것을 FILLED 에서 제외한다.
+          const norm = (s: string): string => s.replace(/\\([\\`*_{}[\]()#+.!|~>-])/g, "$1").replace(/\s+/g, " ")
+          const normMd = reparsed.success ? norm(reparsed.markdown) : ""
           const okCount = reparsed.success
-            ? hwpxResult.filled.filter(f => reparsed.markdown.includes(f.value)).length
+            ? hwpxResult.filled.filter(f => f.value !== "" && normMd.includes(norm(f.value))).length
             : 0
           verifyLine = `검증(마스킹): ${okCount}/${hwpxResult.filled.length} FILLED — 재파싱 대조, 값 미노출`
         }
@@ -507,7 +512,7 @@ server.tool(
       const formInfo = extractFormFields(result.blocks)
       const irInputs = buildFillInputs(fields, formats)
       const fillResult = require_unique
-        ? await fillWithUniqueGuard(irInputs, vals => fillFormFields(result.blocks, vals))
+        ? await fillWithUniqueGuard(irInputs, (vals, blocked) => fillFormFields(result.blocks, vals, blocked))
         : { ...fillFormFields(result.blocks, irInputs), rejected: [] as string[] }
 
       if (fillResult.filled.length === 0 && formInfo.fields.length === 0) {
@@ -518,6 +523,11 @@ server.tool(
       }
 
       const markdown = blocksToMarkdown(fillResult.blocks)
+      // mask_values 시 채운 값(주민번호·연락처 등)이 응답(대화 로그)에 노출되지 않게
+      // 본문 미리보기를 안내 문구로 대체 (sfill-8). 값은 output_path 파일에만 기록된다.
+      const previewMd = mask_values
+        ? "⚠️ mask_values 활성 — 개인정보 노출 방지를 위해 본문을 응답에 포함하지 않습니다. output_path 로 파일 저장 후 확인하세요."
+        : markdown
       const summary = [
         `채워진 필드: ${fillResult.filled.length}개`,
         fillResult.rejected.length > 0 ? `모호 라벨 거부(2곳+ 매칭): ${fillResult.rejected.join(", ")}` : null,
@@ -535,7 +545,7 @@ server.tool(
           }
         }
         return {
-          content: [{ type: "text", text: `[${summary}]\n\n⚠️ output_path를 지정하면 HWPX 파일로 저장됩니다. 미리보기:\n\n${markdown}` }],
+          content: [{ type: "text", text: `[${summary}]\n\n⚠️ output_path를 지정하면 HWPX 파일로 저장됩니다. 미리보기:\n\n${previewMd}` }],
         }
       }
 
@@ -544,11 +554,11 @@ server.tool(
         mkdirSync(dirname(resolve(output_path)), { recursive: true })
         writeFileSync(resolve(output_path), markdown, "utf-8")
         return {
-          content: [{ type: "text", text: `[${summary}]\n\n마크다운 파일 저장: ${resolve(output_path)}\n\n${markdown}` }],
+          content: [{ type: "text", text: `[${summary}]\n\n마크다운 파일 저장: ${resolve(output_path)}\n\n${previewMd}` }],
         }
       }
       return {
-        content: [{ type: "text", text: `[${summary}]\n\n${markdown}` }],
+        content: [{ type: "text", text: `[${summary}]\n\n${previewMd}` }],
       }
     } catch (err) {
       return {

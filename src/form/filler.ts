@@ -37,6 +37,8 @@ export interface FillResult {
 export function fillFormFields(
   blocks: IRBlock[],
   values: Record<string, FillInput>,
+  /** require_unique 2차에서 거부된 라벨 셀 차단 (sfill-2) — hwpx 경로와 동일 계약 */
+  blockedLabels?: Set<string>,
 ): FillResult {
   // deep clone — 원본 불변
   const cloned = structuredClone(blocks)
@@ -70,13 +72,13 @@ export function fillFormFields(
 
   // 2) 테이블 기반 필드 교체 (라벨-값 셀 패턴)
   for (const table of allTables) {
-    fillTable(table, cursor, filled, matchedLabels, patternFilledCells)
+    fillTable(table, cursor, filled, matchedLabels, patternFilledCells, blockedLabels)
   }
 
   // 3) 인라인 "라벨: 값" 패턴 교체
   for (const block of cloned) {
     if (block.type !== "paragraph" || !block.text) continue
-    const newText = fillInlineFields(block.text, cursor, filled, matchedLabels)
+    const newText = fillInlineFields(block.text, cursor, filled, matchedLabels, blockedLabels)
     if (newText !== block.text) block.text = newText
   }
 
@@ -130,6 +132,7 @@ function fillTable(
   filled: FormField[],
   matchedLabels: Set<string>,
   patternFilledCells?: Set<IRCell>,
+  blockedLabels?: Set<string>,
 ): void {
   if (table.cols < 2) return
   const covered = coveredPositions(table)
@@ -154,6 +157,7 @@ function fillTable(
 
       const normalizedCellLabel = normalizeLabel(labelCell.text)
       if (!normalizedCellLabel) continue
+      if (blockedLabels?.has(normalizedCellLabel)) continue
 
       const matchKey = findMatchingKey(normalizedCellLabel, values)
       if (matchKey === undefined) continue
@@ -195,6 +199,7 @@ function fillTable(
         const valueCell = table.cells[r]?.[c]
         if (!headerCell || !valueCell) continue
         const headerLabel = normalizeLabel(headerCell.text)
+        if (blockedLabels?.has(headerLabel)) continue
         const matchKey = findMatchingKey(headerLabel, values)
         if (matchKey === undefined) continue
         // 스칼라: 첫 데이터 행만(기존 동작). 배열: 행마다 다음 값 소진(명부형 표)
@@ -222,6 +227,7 @@ function fillInlineFields(
   values: ValueCursor,
   filled: FormField[],
   matchedLabels: Set<string>,
+  blockedLabels?: Set<string>,
 ): string {
   const segments = scanInlineSegments(text)
   if (segments.length === 0) return text
@@ -229,7 +235,9 @@ function fillInlineFields(
   let out = ""
   let pos = 0
   for (const seg of segments) {
-    const matchKey = findMatchingKey(normalizeLabel(seg.label), values)
+    const nlabel = normalizeLabel(seg.label)
+    if (blockedLabels?.has(nlabel)) continue
+    const matchKey = findMatchingKey(nlabel, values)
     if (matchKey === undefined) continue
 
     const newValue = values.consume(matchKey)

@@ -67,6 +67,9 @@ interface ParaEditLedger {
 export async function fillHwpx(
   hwpxBuffer: ArrayBuffer,
   values: Record<string, FillInput>,
+  /** 이 정규화 라벨의 셀은 어떤 키로도 채우지 않음 — require_unique 2차에서 거부된
+   *  라벨 셀이 접두사 매칭으로 남의 값에 오염되는 것을 차단 (sfill-2) */
+  blockedLabels?: Set<string>,
 ): Promise<HwpxFillResult> {
   const u8 = new Uint8Array(hwpxBuffer)
   const zip = await JSZip.loadAsync(hwpxBuffer)
@@ -145,7 +148,7 @@ export async function fillHwpx(
             for (const m of result.matches) {
               l.filledIdx.push(filled.length)
               l.matchKeys.push(m.key)
-              filled.push({ label: m.label, value: m.value, row: -1, col: -1 })
+              filled.push({ label: m.label, value: m.value, row: -1, col: -1, key: m.key })
             }
           }
         }
@@ -166,6 +169,7 @@ export async function fillHwpx(
 
           const normalizedCellLabel = normalizeLabel(labelText)
           if (!normalizedCellLabel) continue
+          if (blockedLabels?.has(normalizedCellLabel)) continue
           const matchKey = findMatchingKey(normalizedCellLabel, cursor)
           if (matchKey === undefined) continue
 
@@ -186,6 +190,7 @@ export async function fillHwpx(
               value: newValue,
               row: rowIdx,
               col: colIdx,
+              key: matchKey,
             })
           } else {
             const paras = valueCell.paragraphs
@@ -209,6 +214,7 @@ export async function fillHwpx(
               value: newValue,
               row: rowIdx,
               col: colIdx,
+              key: matchKey,
             })
           }
         }
@@ -226,6 +232,7 @@ export async function fillHwpx(
             const dataCells = table.rows[rowIdx]
             for (let colIdx = 0; colIdx < Math.min(headerCells.length, dataCells.length); colIdx++) {
               const headerLabel = normalizeLabel(cellLabelText(headerCells[colIdx]))
+              if (blockedLabels?.has(headerLabel)) continue
               const matchKey = findMatchingKey(headerLabel, cursor)
               if (matchKey === undefined) continue
               // 스칼라: 첫 데이터 행만(기존 동작). 배열: 행마다 다음 값 소진(명부형 표)
@@ -269,7 +276,9 @@ export async function fillHwpx(
       if (existing?.fullText !== undefined) continue
       const text = matchText(para)
       for (const seg of scanInlineSegments(text)) {
-        const matchKey = findMatchingKey(normalizeLabel(seg.label), cursor)
+        const nlabel = normalizeLabel(seg.label)
+        if (blockedLabels?.has(nlabel)) continue
+        const matchKey = findMatchingKey(nlabel, cursor)
         if (matchKey === undefined) continue
         const newValue = cursor.consume(matchKey)
         if (newValue === undefined) continue // 배열 값 소진
@@ -282,7 +291,7 @@ export async function fillHwpx(
         matchedLabels.add(matchKey)
         l.filledIdx.push(filled.length)
         l.matchKeys.push(matchKey)
-        filled.push({ label: seg.label.trim(), value: newValue, row: -1, col: -1 })
+        filled.push({ label: seg.label.trim(), value: newValue, row: -1, col: -1, key: matchKey })
       }
     }
 

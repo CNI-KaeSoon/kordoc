@@ -18,41 +18,61 @@ export type FillInput = FillValue | { value: FillValue; format?: string }
 // ─── 값 서식 변환 (claw-hwp secure-fill formatValue 이식) ─────────────
 
 function parseYMD(v: string): { y: string; yy: string; m: string; d: string } | null {
-  const d = v.replace(/\D/g, "")
   let y: string, m: string, day: string
-  if (d.length >= 8) { y = d.slice(0, 4); m = d.slice(4, 6); day = d.slice(6, 8) }
-  else if (d.length === 6) { const yy = +d.slice(0, 2); y = String(yy <= 29 ? 2000 + yy : 1900 + yy); m = d.slice(2, 4); day = d.slice(4, 6) }
-  else return null
+  // 구분자(. - / 년월일 등)로 분리된 3토큰이면 미패딩 날짜(2026.7.5·2026년 7월 5일)로 우선 해석
+  const parts = v.split(/[^0-9]+/).filter(Boolean)
+  if (parts.length === 3) {
+    const [yp, mp, dp] = parts
+    const yn = +yp
+    y = yp.length >= 3 ? yp : String(yn <= 29 ? 2000 + yn : 1900 + yn)
+    m = mp.padStart(2, "0")
+    day = dp.padStart(2, "0")
+  } else {
+    const d = v.replace(/\D/g, "")
+    if (d.length >= 8) { y = d.slice(0, 4); m = d.slice(4, 6); day = d.slice(6, 8) }
+    else if (d.length === 6) { const yy = +d.slice(0, 2); y = String(yy <= 29 ? 2000 + yy : 1900 + yy); m = d.slice(2, 4); day = d.slice(4, 6) }
+    else return null
+  }
+  // 월 1-12·일 1-31 범위 밖이면 fail-open(쓰레기 날짜 무음 기입 방지)
+  if (+m < 1 || +m > 12 || +day < 1 || +day > 31) return null
   return { y, yy: y.slice(2), m, d: day }
 }
 
 function fmtDate(v: string, style: string): string {
   const p = parseYMD(v)
   if (!p) return v
-  // 토큰 치환, 긴 것 우선: yyyy/yy/mm/dd → 단독 m/d(선행 0 제거)
+  // 토큰 치환(대소문자 무시 — yyyy-MM-dd 혼용 수용, 긴 것 우선). 단독 m/d(선행 0
+  // 제거)는 영문 리터럴(예: "amended")을 오염시키지 않게 영문자에 비인접일 때만 치환.
   return (style || "yyyy-mm-dd")
-    .replace(/yyyy/g, p.y).replace(/yy/g, p.yy)
-    .replace(/mm/g, p.m).replace(/dd/g, p.d)
-    .replace(/m/g, String(+p.m)).replace(/d/g, String(+p.d))
+    .replace(/yyyy/gi, p.y).replace(/yy/gi, p.yy)
+    .replace(/mm/gi, p.m).replace(/dd/gi, p.d)
+    .replace(/(?<![a-z])m(?![a-z])/gi, String(+p.m))
+    .replace(/(?<![a-z])d(?![a-z])/gi, String(+p.d))
 }
 
 /** 숫자 마스크 — `#` 하나가 값의 다음 숫자 하나를 소비, 리터럴은 통과 */
 function maskDigits(v: string, pattern: string): string {
   const ds = v.replace(/\D/g, "")
+  const need = (pattern.match(/#/g) ?? []).length
+  // # 개수와 숫자 개수가 다르거나 패턴에 # 가 없으면, 그럴듯한 오값·끝자리 폐기·
+  // 값 삭제 대신 원형을 반환한다 (무음 왜곡 금지 — fail-open).
+  if (need === 0 || ds.length !== need) return v
   let i = 0
-  return pattern.replace(/#/g, () => ds[i++] ?? "")
+  return pattern.replace(/#/g, () => ds[i++])
 }
 
 function fmtPhone(v: string, style: string): string {
   const d = v.replace(/\D/g, "")
   if (d.length < 9) return v
-  const a = d.slice(0, 3), b = d.slice(3, -4), c = d.slice(-4)
+  // 서울(02)은 2자리 지역번호, 그 외(휴대폰 010·지역 0XX)는 3자리
+  const areaLen = d.startsWith("02") ? 2 : 3
+  const a = d.slice(0, areaLen), b = d.slice(areaLen, -4), c = d.slice(-4)
   switch (style) {
     case "digits": return d
     case "dot": return `${a}.${b}.${c}`
     case "space": return `${a} ${b} ${c}`
-    case "intl": return `+82-${d.slice(1, 3)}-${b}-${c}`
-    case "intl-paren": return `82)${d.slice(1, 3)}-${b}-${c}`
+    case "intl": return `+82-${d.slice(1, areaLen)}-${b}-${c}`
+    case "intl-paren": return `82)${d.slice(1, areaLen)}-${b}-${c}`
     default: return `${a}-${b}-${c}` // hyphen
   }
 }
@@ -82,7 +102,7 @@ export function formatFillValue(value: string, format?: string): string {
   if (kind === "phone") return fmtPhone(value, style)
   if (kind === "rrn") return fmtRRN(value, style)
   if (kind === "mask") return maskDigits(value, style)
-  if (kind === "digits") return value.replace(/\D/g, "")
+  if (kind === "digits") { const only = value.replace(/\D/g, ""); return only || value }
   if (kind === "upper") return value.toUpperCase()
   if (kind === "lower") return value.toLowerCase()
   if (kind === "nospace") return value.replace(/\s+/g, "")
@@ -355,9 +375,9 @@ export function normalizeValues(values: Record<string, FillInput>): Map<string, 
  * 배열 값은 다중 등장 소진이 의도된 동작이라 거부 대상이 아니다.
  * @param run 같은 원본에 대해 결정적으로 재실행 가능한 채우기 함수
  */
-export async function fillWithUniqueGuard<R extends { filled: Array<{ key?: string }> }>(
+export async function fillWithUniqueGuard<R extends { filled: Array<{ key?: string; label: string }> }>(
   values: Record<string, FillInput>,
-  run: (vals: Record<string, FillInput>) => R | Promise<R>,
+  run: (vals: Record<string, FillInput>, blockedLabels?: Set<string>) => R | Promise<R>,
 ): Promise<R & { rejected: string[] }> {
   const first = await run(values)
   const counts = new Map<string, number>()
@@ -373,8 +393,14 @@ export async function fillWithUniqueGuard<R extends { filled: Array<{ key?: stri
   }
   const dup = new Set([...counts].filter(([k, n]) => n >= 2 && !isArrayValue(k)).map(([k]) => k))
   if (dup.size === 0) return { ...first, rejected: [] }
+  // 거부된 키에 매칭됐던 셀 라벨들 — 2차에서 이 셀이 접두사 매칭으로 남은 다른 키에
+  // 재배정되어 남의 값으로 오염되는 것을 차단한다 (sfill-2).
+  const blockedLabels = new Set<string>()
+  for (const f of first.filled) {
+    if (f.key && dup.has(f.key)) blockedLabels.add(normalizeLabel(f.label))
+  }
   const filtered = Object.fromEntries(Object.entries(values).filter(([label]) => !dup.has(normalizeLabel(label))))
-  const second = await run(filtered)
+  const second = await run(filtered, blockedLabels)
   const rejected = Object.keys(values).filter(label => dup.has(normalizeLabel(label)))
   return { ...second, rejected }
 }
