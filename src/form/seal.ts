@@ -62,6 +62,8 @@ export interface SealPlacement {
   sizeMm: number
   /** ZIP에 추가된 이미지 파트 경로 (BinData/imageN.ext) */
   entry: string
+  /** 근사 한계 경고 — 탭·줄바꿈 문단(seal-8), 중첩표(seal-2), 글상자(seal-3). 실측 전 근사. */
+  warnings?: string[]
 }
 
 export interface PlaceSealResult {
@@ -75,6 +77,18 @@ const MIME: Record<string, string> = {
   jpeg: "image/jpeg",
   bmp: "image/bmp",
   gif: "image/gif",
+}
+
+/** 이미지 매직바이트가 확장자와 일치하는지 — .png 이름의 비-PNG(HTML 에러페이지·텍스트)가
+ *  BinData 에 매장되고 image/png 로 등재되는 것을 차단 */
+function imageMagicMatches(buf: Uint8Array, ext: string): boolean {
+  switch (ext) {
+    case "png": return buf.length >= 8 && buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47
+    case "jpg": case "jpeg": return buf.length >= 3 && buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff
+    case "bmp": return buf.length >= 2 && buf[0] === 0x42 && buf[1] === 0x4d
+    case "gif": return buf.length >= 6 && buf[0] === 0x47 && buf[1] === 0x49 && buf[2] === 0x46
+    default: return false
+  }
 }
 
 /** 코드 유닛 하나의 시각 폭(em) — CJK/한글/전각=1, ASCII·반각(공백 포함)=0.5, 제어=0 */
@@ -97,6 +111,8 @@ interface ParaSite {
   para: ScanParagraph
   cell?: ScanCell
   table?: ScanTable
+  /** 중첩표(depth>0) 셀에 속한 문단 — seal-2 근사 한계 경고용 */
+  nested?: boolean
 }
 
 /** 섹션의 본문+셀+글상자 문단을 문서 순서로 평탄화 (머리말·각주 등 excluded 제외) */
@@ -108,7 +124,7 @@ function collectSites(scan: SectionScan): ParaSite[] {
     for (const t of tables) {
       for (const row of t.rows) {
         for (const cell of row) {
-          for (const p of cell.paragraphs) sites.push({ para: p, cell, table: t })
+          for (const p of cell.paragraphs) sites.push({ para: p, cell, table: t, nested: depth > 0 })
           walkTables(cell.tables, depth + 1)
         }
       }
@@ -140,7 +156,13 @@ function anchorRunInfo(
 ): { charPr: string; prefix: string; insertAt: number } | null {
   // 앵커 문자열이 통째로 들어있는 tRange 우선, 없으면 마지막 tRange (run 경계에 걸친 앵커)
   let tr = para.tRanges.find(r => !r.selfClosing && xml.slice(r.contentStart, r.contentEnd).includes(anchor))
-  if (!tr) tr = para.tRanges[para.tRanges.length - 1]
+  if (!tr) {
+    // 앵커가 run 경계에 걸침(부분 굵게·엔티티 분할) — 마지막 run 이 아니라 앵커 첫 글자가
+    // 든 run(앵커 대표 크기)으로 폴백해 글자 크기 배율 드리프트를 줄인다.
+    const head = anchor[0]
+    tr = para.tRanges.find(r => !r.selfClosing && xml.slice(r.contentStart, r.contentEnd).includes(head))
+      ?? para.tRanges[para.tRanges.length - 1]
+  }
   if (!tr) return null
 
   const before = xml.slice(Math.max(0, para.start), tr.contentStart)
@@ -197,14 +219,19 @@ function cellContentWidthMm(xml: string, cell: ScanCell): number | null {
  */
 function cellLeftOffsetMm(xml: string, table: ScanTable, cell: ScanCell): number {
   if (cell.colAddr === undefined) return 0
-  const row = table.rows.find(r => r.includes(cell))
-  if (!row) return 0
-  let sum = 0
-  for (const c of row) {
-    if (c === cell || c.colAddr === undefined || c.colAddr >= cell.colAddr) continue
-    const w = cellSzWidthHu(xml, c)
-    if (w) sum += w
+  // 표 전체 행을 훑어 colAddr별 열폭 테이블을 구성한다 — rowSpan 으로 덮인 행의 <hp:tr>
+  // 에는 선행 열 셀 엔트리가 없어(그 행만 보면 오프셋 0), 결재란 세로병합에서 도장이 한
+  // 열(약 77mm) 왼쪽에 찍혔다. 다른 행에서 같은 colAddr 의 열폭을 조회해 면역시킨다.
+  const colW = new Map<number, number>()
+  for (const row of table.rows) {
+    for (const c of row) {
+      if (c.colAddr === undefined || colW.has(c.colAddr)) continue
+      const w = cellSzWidthHu(xml, c)
+      if (w) colW.set(c.colAddr, w)
+    }
   }
+  let sum = 0
+  for (let col = 0; col < cell.colAddr; col++) sum += colW.get(col) ?? 0
   return sum / HU_PER_MM
 }
 
@@ -263,7 +290,9 @@ export async function placeSealHwpx(hwpxBuffer: ArrayBuffer, ops: SealOp[]): Pro
 
   const sectionPaths = Object.keys(zip.files)
     .filter(name => /[Ss]ection\d+\.xml$/i.test(name))
-    .sort()
+    // 사전순 대신 숫자순 — section10 이 section2 앞에 오면 occurrence·sectionIndex 가
+    // 파서(zip-sections compareSectionPaths)의 문서 순서와 어긋나 엉뚱한 위치에 날인된다.
+    .sort((a, b) => (Number(a.match(/(\d+)\.xml$/i)?.[1] ?? 0)) - (Number(b.match(/(\d+)\.xml$/i)?.[1] ?? 0)))
   if (sectionPaths.length === 0) throw new KordocError("HWPX에서 섹션 파일을 찾을 수 없습니다")
 
   const manifestPath = Object.keys(zip.files).find(name => /\.hpf$/i.test(name))
@@ -319,6 +348,7 @@ export async function placeSealHwpx(hwpxBuffer: ArrayBuffer, ops: SealOp[]): Pro
     if (!op.image || op.image.length === 0) throw new KordocError("place_seal: 도장 이미지가 필요합니다")
     const ext = (op.ext ?? "png").toLowerCase()
     if (!MIME[ext]) throw new KordocError(`place_seal: 지원하지 않는 이미지 확장자 .${ext} (png/jpg/bmp/gif)`)
+    if (!imageMagicMatches(op.image, ext)) throw new KordocError(`place_seal: 이미지 내용이 .${ext} 형식이 아닙니다 (매직바이트 불일치)`)
     const wantOcc = op.occurrence ?? 0
 
     // 앵커 탐색 — 전 섹션 문서 순서, 문단 내 다중 등장 포함
@@ -374,7 +404,11 @@ export async function placeSealHwpx(hwpxBuffer: ArrayBuffer, ops: SealOp[]): Pro
     const lineHMm = emMm
     const startXMm = measureMm(site.para.text.slice(0, idxInText), emMm)
     const anchorWMm = measureMm(op.anchor, emMm)
-    const sizeMm = op.sizeMm ?? Math.max(7, Math.min(18, lineHMm * 1.6))
+    // NaN·음수 sizeMm(CLI 비숫자·직접 호출)은 기본 크기로 폴백 — hp:sz width="NaN" 등
+    // OWPML 정수 속성에 NaN 문자열이 기록되던 것 원천 차단 (seal-4)
+    const sizeMm = (op.sizeMm != null && Number.isFinite(op.sizeMm) && op.sizeMm > 0)
+      ? op.sizeMm
+      : Math.max(7, Math.min(18, lineHMm * 1.6))
 
     // 사용가능 폭 + 정렬 이동
     const availMm = (site.cell ? cellContentWidthMm(xml, site.cell) : null) ?? bodyColumnWidthMm(xml)
@@ -419,6 +453,14 @@ export async function placeSealHwpx(hwpxBuffer: ArrayBuffer, ops: SealOp[]): Pro
       replacement: `<${run.prefix}:run charPrIDRef="${run.charPr}">${pic}</${run.prefix}:run>`,
     })
 
+    // 근사 한계 경고 — 메트릭·원점 모델이 근사인 케이스를 결과에 명시(placed 소비자가 dx/dy 보정)
+    const warnings: string[] = []
+    const paraSeg = xml.slice(site.para.start, run.insertAt)
+    if (/<[A-Za-z0-9]+:tab\b/.test(paraSeg)) warnings.push("탭이 든 문단 — 도장 가로 위치가 근사값입니다 (dx 로 보정)")
+    if (/<[A-Za-z0-9]+:(lineBreak|br)\b/.test(paraSeg)) warnings.push("줄바꿈이 든 문단 — 앵커가 2번째 줄 이하면 세로 위치가 어긋날 수 있습니다 (dy 로 보정)")
+    if (site.nested) warnings.push("중첩표(표 안 표) 셀 앵커 — 바깥 셀 오프셋은 근사이며 한컴 실측 전이라 어긋날 수 있습니다 (dx 로 보정)")
+    if (site.para.inTextbox) warnings.push("글상자 앵커 — 글상자 기하를 반영하지 않아 정렬 보정이 근사입니다 (dx/dy 로 보정)")
+
     placed.push({
       anchor: op.anchor,
       occurrence: wantOcc,
@@ -428,6 +470,7 @@ export async function placeSealHwpx(hwpxBuffer: ArrayBuffer, ops: SealOp[]): Pro
       posYMm: Math.round(posYMm * 100) / 100,
       sizeMm: Math.round(sizeMm * 100) / 100,
       entry,
+      ...(warnings.length > 0 ? { warnings } : {}),
     })
   }
 

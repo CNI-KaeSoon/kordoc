@@ -325,8 +325,24 @@ program
         process.stderr.write(`[kordoc] seal 은 HWPX 전용입니다 (HWP 5.x 바이너리는 미지원)\n`)
         process.exit(1)
       }
-      const image = new Uint8Array(readFileSync(resolve(opts.image)))
+      const imgPath = resolve(opts.image)
+      const imgSize = statSync(imgPath).size
+      if (imgSize > 500 * 1024 * 1024) {
+        process.stderr.write(`[kordoc] 도장 이미지가 너무 큽니다 (${(imgSize / 1024 / 1024).toFixed(0)}MB)\n`)
+        process.exit(1)
+      }
+      const image = new Uint8Array(readFileSync(imgPath))
       const ext = extname(opts.image).slice(1).toLowerCase() || "png"
+      // --size-mm 검증 — 비숫자·음수가 NaN/음수로 XML 속성에 그대로 기록되던 것 차단 (MCP zod 동등)
+      let sizeMm: number | undefined
+      if (opts.sizeMm != null) {
+        const n = Number(opts.sizeMm)
+        if (!Number.isFinite(n) || n <= 0) {
+          process.stderr.write(`[kordoc] --size-mm 은 양수여야 합니다: ${opts.sizeMm}\n`)
+          process.exit(1)
+        }
+        sizeMm = n
+      }
       const result = await placeSealHwpx(
         buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength) as ArrayBuffer,
         [{
@@ -334,7 +350,7 @@ program
           occurrence: Number(opts.occurrence) || 0,
           image,
           ext: ext as "png" | "jpg" | "jpeg" | "bmp" | "gif",
-          sizeMm: opts.sizeMm != null ? Number(opts.sizeMm) : undefined,
+          sizeMm,
           mode: mode as "overlap" | "right" | "auto",
           dxMm: Number(opts.dx) || 0,
           dyMm: Number(opts.dy) || 0,
@@ -346,6 +362,7 @@ program
       if (!silent) {
         for (const p of result.placed) {
           process.stderr.write(`[kordoc] 도장 배치: "${p.anchor}" #${p.occurrence} → ${p.mode} (${p.posXMm}mm, ${p.posYMm}mm, ${p.sizeMm}mm) [${p.entry}]\n`)
+          for (const w of p.warnings ?? []) process.stderr.write(`[kordoc] ⚠️ ${w}\n`)
         }
         process.stderr.write(`[kordoc] → ${outPath}\n`)
       }

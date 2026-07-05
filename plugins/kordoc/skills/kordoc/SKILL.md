@@ -40,6 +40,8 @@ MCP 도구 11종: `parse_document`, `parse_table`, `parse_pages`, `parse_metadat
 | 조판 SVG 렌더 | `npx -y kordoc@^3 render 문서.hwpx -o 미리보기.svg` |
 | 도장/서명 배치 | `npx -y kordoc@^3 seal 문서.hwpx --image 도장.png --anchor "(인)" -o 결과.hwpx` |
 
+> **도장 위치 한계**: 중첩표·글상자·탭/줄바꿈 문단·복잡 rowSpan 그리드는 근사 배치이며 결과 `warnings` 에 고지된다 — 한컴에서 확인 후 `--dx`/`--dy`(MCP `dx_mm`/`dy_mm`)로 보정한다.
+
 ## 워크플로
 
 ### 1) 읽기 — 어떤 문서든 Markdown 으로

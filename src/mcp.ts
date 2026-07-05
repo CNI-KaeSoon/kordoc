@@ -595,7 +595,11 @@ server.tool(
           isError: true,
         }
       }
-      const image = new Uint8Array(readFileSync(resolve(image_path)))
+      const imgResolved = resolve(image_path)
+      if (statSync(imgResolved).size > 500 * 1024 * 1024) {
+        return { content: [{ type: "text", text: `도장 이미지가 너무 큽니다 (${(statSync(imgResolved).size / 1024 / 1024).toFixed(0)}MB) — 500MB 이하여야 합니다.` }], isError: true }
+      }
+      const image = new Uint8Array(readFileSync(imgResolved))
       const ext = (extname(image_path).slice(1).toLowerCase() || "png") as "png" | "jpg" | "jpeg" | "bmp" | "gif"
       const { placeSealHwpx } = await import("./form/seal.js")
       const result = await placeSealHwpx(buffer, [{
@@ -605,10 +609,11 @@ server.tool(
       mkdirSync(dirname(resolve(output_path)), { recursive: true })
       writeFileSync(resolve(output_path), Buffer.from(result.buffer))
       const p0 = result.placed[0]
+      const warnLines = (p0.warnings ?? []).map(w => `\n⚠️ ${w}`).join("")
       return {
         content: [{
           type: "text",
-          text: `도장 배치 완료: "${p0.anchor}" #${p0.occurrence} → ${p0.mode} (x ${p0.posXMm}mm, y ${p0.posYMm}mm, ${p0.sizeMm}mm각, ${p0.entry})\n저장: ${resolve(output_path)}\n표/페이지 불확장(글 앞 부유) — 한컴에서 위치 확인 후 dx_mm/dy_mm 로 미세조정 가능합니다.`,
+          text: `도장 배치 완료: "${p0.anchor}" #${p0.occurrence} → ${p0.mode} (x ${p0.posXMm}mm, y ${p0.posYMm}mm, ${p0.sizeMm}mm각, ${p0.entry})\n저장: ${resolve(output_path)}${warnLines}\n표/페이지 불확장(글 앞 부유) — 한컴에서 위치 확인 후 dx_mm/dy_mm 로 미세조정 가능합니다.`,
         }],
       }
     } catch (err) {

@@ -123,3 +123,34 @@ describe("placeSealHwpx", () => {
     )
   })
 })
+
+describe("도장 배치 엣지 회귀 (seal-1/4/5/8)", () => {
+  it("seal-1: rowSpan 결재란에서 덮인 행 앵커가 같은 열에 정렬(열 오프셋 면역)", async () => {
+    const md = `<table><tr><td rowspan="2">결재</td><td>담당 (인)</td></tr><tr><td>과장 (인)</td></tr></table>`
+    const buf = await markdownToHwpx(md)
+    const r = await placeSealHwpx(buf, [
+      { anchor: "(인)", occurrence: 0, image: PNG_1PX },
+      { anchor: "(인)", occurrence: 1, image: PNG_1PX },
+    ])
+    // 두 앵커는 같은 그리드 열(col1) — posXMm 이 같아야 (rowSpan 덮인 행 오프셋 0 회귀 방지)
+    assert.equal(r.placed[0].posXMm, r.placed[1].posXMm, "rowSpan 덮인 행도 같은 열 오프셋")
+  })
+  it("seal-4: NaN·음수 sizeMm 는 기본 크기로 폴백 (hp:sz='NaN' XML 방지)", async () => {
+    const buf = await markdownToHwpx("도장 (인)\n")
+    const r = await placeSealHwpx(buf, [{ anchor: "(인)", sizeMm: NaN, image: PNG_1PX }])
+    assert.ok(Number.isFinite(r.placed[0].sizeMm) && r.placed[0].sizeMm > 0, `NaN → 기본 크기 (실제: ${r.placed[0].sizeMm})`)
+  })
+  it("seal-5: 확장자와 다른 매직바이트(비-PNG)는 거부", async () => {
+    const buf = await markdownToHwpx("도장 (인)\n")
+    await assert.rejects(
+      placeSealHwpx(buf, [{ anchor: "(인)", image: new Uint8Array([0x3c, 0x68, 0x74, 0x6d, 0x6c]), ext: "png" }]),
+      (err: unknown) => err instanceof KordocError && /매직바이트/.test((err as Error).message),
+    )
+  })
+  it("seal-8: 중첩표 셀 앵커는 근사 한계 경고를 낸다", async () => {
+    const md = `<table><tr><td>외곽<table><tr><td>서명 (인)</td></tr></table></td></tr></table>`
+    const buf = await markdownToHwpx(md)
+    const r = await placeSealHwpx(buf, [{ anchor: "(인)", image: PNG_1PX }])
+    assert.ok(r.placed[0].warnings?.some(w => /중첩표/.test(w)), `중첩표 경고 기대: ${JSON.stringify(r.placed[0].warnings)}`)
+  })
+})
