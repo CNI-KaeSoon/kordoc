@@ -1,10 +1,13 @@
 # next-session: 결재란(전자결재 스탬프) 텍스트 겹침 수정 — 조사 핸드오프
 
-**상태**: ✅ **수정 완료** (2026-07-06 집/Windows) — 루트코즈는 §5 가설 A/B/C가 아니라 **reflow lineseg textpos 폴백 버그**였음(§10). Mac 잔여: `bench:visual` + `bench:gate`(corpus) 무회귀 확인만.
+**상태**: ✅ **종결 — main 머지·v3.17.0 릴리스** (2026-07-06 맥미니). 수정은 집/Windows(루트코즈 = §5 가설 A/B/C가 아니라 **reflow lineseg textpos 폴백 버그**, §10), 검증·머지는 맥미니.
 **작성**: 2026-07-06 · **분류**: reflow 다중 중첩표 geometry 버그 (저우선이었으나 사용자 요청으로 격상)
 
-> ⚠️ 회귀 정석 검증(`bench:visual` 한컴 시각오라클)은 **macOS+한컴 GUI 전용**. Windows에선 완전보증 불가 →
-> Windows에서 Edge/overlap-check/785테스트/스팟체크까지 완료. **Mac에선 오라클+corpus 게이트만 돌리면 됨.**
+> 맥미니 검증(2026-07-06): 802/802 테스트 + 돌릴 수 있는 게이트 5종(score 품질·roundtrip·pdf-table·formats·fuzz) PASS +
+> **코퍼스 75 hwpx 3점(main/픽스전/픽스후) × cached·reflow 렌더 스윕**(`bench/out/sweep-render.mjs`, 로컬) — 픽스 단독 cached 71/75
+> byte-identical, 변경 4건 전부 의도 개선(NARROWLY 스왑 2·페이지 분리 2, Chrome 스크린샷 육안), reflow 개선 5/악화 0(+1은 포화문서 노이즈).
+> `bench:visual`(한컴 오라클)은 맥미니에 한컴이 없어 **사용자 승인 하에 이미지 검증으로 대체** — 원하면 회사 Mac에서 merged main으로 1회 재확인.
+> score 모수 하한은 맥미니 코퍼스 구본(85/48/10 < 170/25/12)이라 미달 — seoul/ 포함 코퍼스 rsync 역동기화 필요(품질 게이트와 무관).
 
 ---
 

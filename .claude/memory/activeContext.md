@@ -1,9 +1,17 @@
 # Active Context — kordoc 본체
 
-**마지막 업데이트**: 2026-07-04 (연속 세션 11: 프로즈 박스 감지 + HML 표 캡션 → v3.13.0)
-**상태**: 테스트 683/683. `npm run bench:gate` 5체인 전부 PASS. tsc 13(기존 — 신규 0)
+**마지막 업데이트**: 2026-07-06 (12차 맥미니: 결재란 트랙 종결 → **v3.17.0 릴리스**)
+**상태**: 테스트 802/802. 게이트: score 품질·roundtrip·pdf-table·formats·fuzz PASS (⚠️맥미니 한정 — score 모수 하한·verify-reflow는 코퍼스 구본이라 불가, 아래 12차 참조)
 
-## 이번 세션 완료 (2026-07-04 연속 11차 — v3.13.0)
+## 이번 세션 완료 (2026-07-06 12차 — 결재란 트랙 종결 → v3.17.0)
+
+> 참고: v3.14.0~v3.16.2(다페이지·Tier-2 reflow·도장·차트·플러그인·시각오라클)는 다른 PC 세션들 진행분 —
+> 이 파일 미갱신 구간. 상세는 CHANGELOG + `.claude/plans/next-session-viewer-unification.md`.
+
+- **결재란 겹침 트랙 완결**: `docs/gyeoljaeran-overlap-handoff` 4커밋(2423a0a 폰트·중첩표셀높이·다구역 / ddc98cd 조사 / 6ff0856 reflow textpos 폴백 0 / 0a08e1c landscape 스왑+v0 페이지분할) main ff 머지 → **v3.17.0** (npm+gh release, 361b26e)
+- **루트코즈**: 실텍스트 0 문단의 합성 lineseg textpos가 chars.length 폴백 → advanceTo 가로 전진에서 인라인 개체 배제 → 결재란 라벨표·스탬프표 같은 x 포개짐. 조사 가설 A(objBottom 세로누적)는 오답 — 한컴 정답은 나란히 배치
+- **한컴 오라클 없이 검증(사용자 승인)**: 코퍼스 75 hwpx × 3점(main/픽스전/픽스후) × cached·reflow 스윕(`bench/out/sweep-render.mjs`) — 픽스 단독 cached 71/75 byte-identical + 변경 4건 전부 의도 개선(NARROWLY 스왑 2건 육안, 페이지 분리 2건), reflow 개선 5/실질 악화 0. Chrome headless 스크린샷 3쌍 육안 확정
+- **⚠️맥미니 환경 실측**: 한컴 미설치(bench:visual 불가) / `bench/corpus/seoul` 부재(verify-reflow 불가) / 코퍼스 구본 hwpx 85·쌍 10 (정본 2026-07-05 실측 347·23) → score 모수 하한 미달. **seoul/ 포함 rsync 역동기화 필요**
 
 백로그 A(ice-geomjeong) + B(hml bizinfo) 각개 격파, eval-perf-2024 재분류:
 
@@ -128,13 +136,14 @@
 
 ## 다음 세션 후보
 
-- **pdf표GT 매칭 트랙 종결** (98.55%, 잔여 1 원리적 수용). **ice-geomjeong·hml
-  bizinfo 완료**(11차). **eval-perf-2024는 원리적 수용**(다이어그램 찢김, 아래 참조)
+- **맥미니 코퍼스 rsync 역동기화** (seoul/ 포함 — verify-reflow·score 모수 하한 해소).
+  (선택) 회사 Mac에서 v3.17.0 main으로 bench:visual 1회 — 결재란 트랙 오라클 재확인
+- 뷰어 통합 트랙 잔여는 `.claude/plans/next-session-viewer-unification.md` 기준으로 재평가
+  (Tier-2 reflow는 v3.15.0에 랜딩됨 — 플랜 문서의 "미착수" 표기는 스테일)
 - 남은 소액 백로그: **A-5 폼 정오**(코퍼스에 실체 미확인 — 플랜 메모 모호, 재정의
   필요) / **hwp3 합성 픽스처**(유효 HWP3 바이너리 합성 = 비자명, 테스트 커버리지용)
 - 잔존 저커버 pdf는 대부분 **비선형 도식**(성과체계도·조직도)·병합 열 표현 차 —
   원리적 잔여로 분류. pdf 쪽 새 증거 없으면 착수 금지
-- 렌더 차기(다단·2페이지+·도형)는 요청 시만
 
 ## 재론 금지 (기존 유지)
 
